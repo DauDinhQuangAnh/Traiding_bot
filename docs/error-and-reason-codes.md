@@ -40,13 +40,14 @@ Expected action vocabulary:
 
 | Code | Category | Severity | Meaning | Expected action | Journal behavior |
 |---|---|---|---|---|---|
-| `REGIME_UNCERTAIN` | REGIME | INFO | Evidence thiếu/xung đột; output UNCERTAIN | NO_TRADE | Decision + candidate evidence |
+| `REGIME_UNCERTAIN` | REGIME | INFO | Evidence thiếu/xung đột; output UNCERTAIN | NO_TRADE | Decision + structured regime evidence |
 | `HIGH_VOLATILITY_BLOCKED` | REGIME | WARNING | High-volatility gate active | NO_TRADE | Decision + volatility evidence |
 | `REGIME_DIRECTION_BLOCKED` | REGIME | INFO | Direction trái regime policy | NO_TRADE | Decision + direction/regime |
 | `RANGE_INVALID` | SETUP | WARNING | Range thiếu, overlap hoặc không đủ validity | NO_TRADE | Decision + range validation |
 | `RANGE_STALE` | SETUP | WARNING | Một hoặc cả hai boundary quá stale theo bar limit | NO_TRADE | Decision + last validation/limit |
 | `SIDEWAY_MIDDLE_RANGE` | SETUP | INFO | SIDEWAY price ở middle zone | NO_TRADE | Decision bắt buộc lưu location/levels |
-| `NO_CONFIRMATION` | SETUP | INFO | Chưa có closed candle/momentum confirmation | NO_TRADE | Decision + missing evidence |
+| `SETUP_DISABLED` | SETUP | INFO | Deterministically selected setup không nằm trong configured allowed set | NO_TRADE | Decision + setup/config version |
+| `NO_CONFIRMATION` | SETUP | INFO | Final closed M5 child candle không đạt directional confirmation formula | NO_TRADE | Decision + candle/evidence operands |
 | `BREAKOUT_CONFIRMATION_PENDING` | SETUP | INFO | Breakout detect, đang chờ confirmation | NO_TRADE | Decision + breakout state |
 | `BREAKOUT_INVALIDATED` | SETUP | INFO | Breakout không giữ được boundary trong confirmation | NO_TRADE/reset setup | Decision + invalidating candle |
 | `RETEST_PENDING` | SETUP | INFO | Breakout confirmed, chưa có retest | NO_TRADE | Decision + expiry |

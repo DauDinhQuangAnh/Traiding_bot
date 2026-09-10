@@ -14,21 +14,21 @@ missing value là startup error, không phải default ngầm.
 
 ## 2. Review table
 
-| Review Area | Status | Evidence | Issue | Required Action |
-|---|---|---|---|---|
-| Domain Models | PASS | `domain-models.md` §3–6 | Đã bổ sung indicator derivatives, evidence, range provenance, execution fields và lifecycle IDs/state | Implement validators đúng contract; không thêm nullable/default ngầm |
-| Enums | PASS | `domain-models.md` §2; `error-and-reason-codes.md` | Đã tách bot state/lifecycle state và TradeSide/OrderDirection | Dùng duy nhất canonical enums/alias migration đã ghi |
-| Configuration | PASS | `configuration.md` §3–7 | Đã loại wildcard/semantic duplicate; thêm indicator, regime, level, retry, protection và validation chéo | Mọi `BACKTEST_REQUIRED` value phải explicit trước runtime |
-| Strategy | PASS | `strategy.md` §2–8 | Qualitative terms đã được thay bằng ramp, formula, gate và tie-break deterministic | Implement pure functions và golden tests |
-| Regime Detection | PASS | `regime-detection.md` §2–10 | Đã chốt score, evidence count, precedence, persistence và range/breakout rules | Inject prior assessment/range state; không đọc state ẩn |
-| Position Sizing | PASS | `position-sizing.md` §3–10 | Đã chốt multiplier support, adverse rounding, recomputation và approval invariants | Chứng minh property `worst_case_loss <= risk_budget` |
-| Market Data | PASS | `market-data.md` §3–12 | Closed-only, UTC, identity, ordering, gap, stale, warm-up và indicator formulas đã rõ | Reject corrupted input; không synthetic fill/future candle |
-| Error Codes | PASS | `error-and-reason-codes.md` §2–4 | Đã bổ sung coverage data/signal/risk/execution/recovery và map legacy aliases | Persist canonical code + typed observed/limit values |
-| State Machine | PASS | `technical-specification.md` §9; `domain-models.md` §2, §4.17 | Đã tách global bot state và per-trade lifecycle, có legal/illegal transition rules | StateMachine là owner duy nhất của transition |
-| Risk Engine | PASS | `risk-management.md`; `position-sizing.md` §9.1; `technical-specification.md` §8 | Final veto, health/limit gates và only-creator rule cho ApprovedTradePlan nhất quán | Property-test từng hard gate và không cho downstream nới risk |
-| Execution Contract | PASS | `technical-specification.md` §5, §9.3, §11 | Request/report fields, approval gate, deterministic IDs và query-before-retry đã rõ | Adapter chỉ phát facts, không tự đổi domain state |
-| Persistence / Journal | PASS | `technical-specification.md` §10–13; `domain-models.md` §4.16–6 | Write-ahead, append-only, revisions, correlation/version IDs và every-decision journal đã rõ | Enforce unique constraints và optimistic concurrency |
-| Recovery | PASS | `technical-specification.md` §9.3; `error-and-reason-codes.md` | Đã chốt unknown submit, partial fill, SL/TP failure, restart và exhausted behavior | Reconcile authoritative external state trước mọi retry/new entry |
+| Area | Status | Evidence | Notes |
+|---|---|---|---|
+| Domain Models | PASS | `domain-models.md` §2–6 | Canonical enums, immutable models, nullability, provenance và validators đã định nghĩa; `TradeCandidate` mang regime và hai score nhưng không có quantity/leverage. |
+| Configuration | PASS | `configuration.md` §3–7 | Không còn wildcard business config; mọi key, type, range, cross-field rule và failure behavior đều explicit. |
+| Regime Detection | PASS | `regime-detection.md` §2–6 | Evidence atoms, normalization, candidate qualification, conflict, precedence và persisted confirmation algorithm đều deterministic. |
+| Strategy | PASS | `strategy.md` §2–8 | Sáu canonical components có exact operands, timeframe, formulas, configured maxima/weights, aggregation, gates và tie-breaks. |
+| Sideway Logic | PASS | `regime-detection.md` §7–10; `strategy.md` §6 | Range construction, validity, normalized location, middle-range block và ordered breakout/retest transitions đã khóa. |
+| Position Sizing | PASS | `position-sizing.md` §3–10 | Contract multiplier, adverse rounding, caps và recomputation bắt buộc chứng minh `worst_case_loss <= risk_budget`. |
+| Risk Engine | PASS | `risk-management.md`; `position-sizing.md` §9.1; `technical-specification.md` §8 | Risk là final veto và owner duy nhất tạo `ApprovedTradePlan`; execution không được nới risk. |
+| Market Data | PASS | `market-data.md` §3–12 | Closed-only, UTC, identity/order/gap/stale/warm-up và canonical indicator formulas đã rõ. |
+| State Machine | PASS | `technical-specification.md` §9; `domain-models.md` §4.17 | Global bot state và per-trade lifecycle tách biệt, legal/illegal transitions explicit. |
+| Idempotency | PASS | `technical-specification.md` §9.3, §11–13 | Deterministic IDs, uniqueness, write-ahead intent và query-before-retry đã định nghĩa. |
+| Recovery | PASS | `technical-specification.md` §9.3; `error-and-reason-codes.md` | Unknown submit, partial fill, protection failure, restart và exhausted outcomes đều fail-safe. |
+| Error Codes | PASS | `error-and-reason-codes.md` §2–4 | Canonical registry bao phủ data/config/signal/risk/execution/recovery; aliases không tạo semantics mới. |
+| Secret Handling | PASS | `configuration.md` §6 | Secrets chỉ đến từ environment, bị loại khỏi config hash/log/Git và không được tạo trong Phase 2. |
 
 ## 3. Cross-document consistency
 
@@ -43,9 +43,9 @@ missing value là startup error, không phải default ngầm.
 | `RangeContext` | `LevelEngine` | regime, strategy, journal | Boundary IDs, width/mid/location, freshness và breakout revision đủ để replay |
 | `Level` | `LevelEngine` | `LevelSet`, stop/target planning | Provenance, confirmation time, tests/strength và invalidation point-in-time |
 | `LevelSet` | `LevelEngine` | regime, strategy, journal | Chứa supports/resistances/swings, structure và optional range cùng `as_of` |
-| `SignalComponent` | `SignalScorer` | assessment, journal, analytics | Points và structured evidence tái tạo được từ config |
+| `SignalComponent` | `SignalScorer` | assessment, journal, analytics | Enum name, directional points/operands và structured evidence tái tạo được từ config |
 | `SignalAssessment` | `SignalScorer` | `DecisionEngine`, journal | Dual score, gate results và versions; không tự chọn side |
-| `TradeCandidate` | `DecisionEngine` | risk, journal | Không có quantity/leverage; có setup, stop/target provenance và cost estimate |
+| `TradeCandidate` | `DecisionEngine` | risk, journal | Không có quantity/leverage; có regime, selected/opposite scores, setup, stop/target provenance và cost estimate |
 | `RiskContext` | risk-context assembler | `RiskEngine`, journal | Equity/exposure/session counters, quote, health và reconciliation cùng version |
 | `RiskDecision` | `RiskEngine` | state/execution gate, journal | APPROVE/REJECT/HALT; IDs nullable theo action |
 | `ApprovedTradePlan` | `RiskEngine` only | execution, positions, journal | Immutable, quantized, TTL, risk budget/loss/RR và approval identity |
@@ -95,7 +95,13 @@ tự cấp quyền execution.
 | `TradeLifecycle.state` dùng global `BotState` | Tạo `TradeLifecycleState` và transition table riêng |
 | LONG/SHORT có nguy cơ bị dùng như BUY/SELL | Tách `TradeSide` và `OrderDirection`, map theo purpose/reduce-only |
 | Regime/strategy dùng từ định tính và wildcard config | Chốt formulas, ramps, evidence keys, thresholds, precedence và tie-breaks |
+| Component config dùng `<name>` và không khóa evidence registry | Dùng exact six-key `SignalComponentName` mappings; từng component có exact evidence keys, enabled/disabled validation và tổng max score 100 |
+| Score chưa khóa timeframe, operand và confirmation source | Dùng M15 indicators/structure, trigger M15 close, final child M5 confirmation và setup-specific RSI bands; evidence lưu operand/unit/source IDs |
+| Strategy từng nêu active-position/pending-order gate nhưng không nhận account/order input | Chuyển gate này về orchestration/Risk; Strategy chỉ xử lý market/regime/level/config inputs |
+| Structure dùng chung cluster tolerance và không khóa timeframe | Chốt canonical structure ở M15 và dùng riêng `levels.structure_comparison_tolerance_atr` |
 | Stateful regime persistence không xuất hiện trong interface | `prior_assessment` trở thành input nullable explicit; missing recovery state fail closed |
+| Regime persistence chưa định nghĩa previous confirmed state/count update | Chốt exact `last_confirmed`, candidate count, high-volatility bypass, wait/confirm/reset và restart algorithm |
+| Setup bị config disable chưa có outcome canonical | Chốt `NO_TRADE` với `SETUP_DISABLED` và đăng ký reason code duy nhất |
 | Range edge/breakout có thể overlap hoặc chọn tùy ý | Chốt normalized zones, exact boundary inequalities và breakout-before-mean-reversion priority |
 | Stop ATR buffer nằm trong risk config dù Strategy dựng candidate | Chuyển thành `strategy.stop.atr_buffer`; Risk chỉ validate min/max/tick/spread guards |
 | Hai config ordering window cùng semantics | Giữ duy nhất `data.ordering_window` |
@@ -133,6 +139,10 @@ tự cấp quyền execution.
 | Strategy deterministic | PASS | `strategy.md` formulas and tie-breaks |
 | Regime detection deterministic | PASS | Candidate formulas, precedence and persistence input |
 | SIDEWAY logic deterministic | PASS | Range location and breakout/retest state machine |
+| Entry/stop/target rules deterministic | PASS | Setup order, structural anchors, buffers, opposing-level selection and RR formulas |
+| Config fields and validation explicit | PASS | Exact typed keys, evidence registries, ranges, feasibility checks and startup HALT |
+| Signal conflict behavior defined | PASS | Regime → `UNCERTAIN`; strategy → `NO_TRADE` + `AMBIGUOUS_SIGNAL` |
+| Unknown regime behavior defined | PASS | Canonical `UNCERTAIN` is fail-closed and always blocks candidate creation |
 | Position sizing mathematically complete | PASS | Metadata conversion, floor rounding and recomputation |
 | Risk invariants explicit | PASS | `position-sizing.md` §9.1 |
 | Market data validation defined | PASS | `market-data.md` validation/readiness contract |
@@ -144,7 +154,38 @@ tự cấp quyền execution.
 | No cross-document contradictions remain | PASS | Second-pass cross-reference review |
 | PHASE 3 need not invent business logic | PASS | Remaining inputs are typed calibration/adapter data only |
 
-## 7. Gate decision and next scope
+## 7. Implementation readiness test
+
+Một developer bắt đầu PHASE 3 chỉ từ các tài liệu hiện tại có phải tự quyết định các
+business rule sau không?
+
+| Question | Answer | Contract that removes the decision |
+|---|---|---|
+| Indicator nào dùng? | **NO** | `market-data.md` khóa EMA20/50/200, RSI, ATR, ADX, Bollinger width và volume mean/ratio; không được tự thêm indicator. |
+| Period bao nhiêu? | **NO** | EMA cố định `[20,50,200]`; các period/lookback còn lại là typed `BACKTEST_REQUIRED` inputs. Missing value làm `CONFIG_INVALID`, không cho developer chọn default. |
+| Regime xác định thế nào? | **NO** | `regime-detection.md` §2–6 có exact atoms, ramps, weights, qualification, conflict, precedence và confirmation state. |
+| Score tính thế nào? | **NO** | `strategy.md` §3–5 định nghĩa six-component strengths, configured weights/maxima, sum, confluence và advantage gates. |
+| Near support nghĩa là gì? | **NO** | `position_in_range` và inclusive boundaries ở `regime-detection.md` §7 quyết định location. |
+| Breakout nghĩa là gì? | **NO** | §9 định nghĩa exact M15 detect, subsequent confirmation, retest, invalidation và expiry inequalities. |
+| Confirmation nghĩa là gì? | **NO** | `strategy.md` §3 khóa body/wick/close-location formulas trên final closed M5 child candle. |
+| Quantity round thế nào? | **NO** | `position-sizing.md` khóa floor-to-lot, contract conversion, caps và post-round risk recomputation. |
+| Invalid config xử lý sao? | **NO** | `configuration.md` §5: `CONFIG_INVALID`, global `HALTED`, không tạo provider/execution side effect. |
+| Signal conflict xử lý sao? | **NO** | Regime conflict → `UNCERTAIN`; dual eligible strategy signal → `NO_TRADE` + `AMBIGUOUS_SIGNAL`; không tie-break tùy ý. |
+
+### Remaining assumptions
+
+- Numerical values gắn `BACKTEST_REQUIRED` phải được một versioned experiment/config
+  cung cấp và calibrate trước runtime. Đây là input vận hành, không phải quyền tự chọn
+  business rule của developer; missing/invalid luôn fail startup.
+- Provider/adapter phải cung cấp point-in-time candles, instrument metadata, fee,
+  slippage và funding estimates theo các port contracts. Strategy không được tự giả lập
+  giá trị bị thiếu.
+- Evaluation đầu tiên hoặc restart không khôi phục được prior assessment dùng
+  `prior_assessment=null` và phải tích lũy lại đủ confirmation count.
+- Profitability và numerical tuning chưa được khẳng định; chúng thuộc backtest/validation
+  sau này và không thay đổi deterministic formulas nếu không tăng version.
+
+## 8. Gate decision and next scope
 
 **PHASE 2: APPROVED**
 

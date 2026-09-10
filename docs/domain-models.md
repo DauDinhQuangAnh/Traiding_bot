@@ -41,6 +41,7 @@
 | `OrderPurpose` | `ENTRY`, `STOP`, `TAKE_PROFIT`, `EXIT` |
 | `OrderType` | `MARKET`, `LIMIT`, `STOP_MARKET`, `TAKE_PROFIT_MARKET` |
 | `OrderDirection` | `BUY`, `SELL` |
+| `SignalComponentName` | `TREND`, `MOMENTUM`, `STRUCTURE`, `LEVEL`, `VOLUME`, `CONFIRMATION` |
 | `SetupType` | `TREND_PULLBACK`, `SIDEWAY_MEAN_REVERSION`, `BREAKOUT_RETEST` |
 | `EntryModel` | `CLOSE_REFERENCE` |
 | `TargetModel` | `NEXT_OPPOSING_LEVEL` |
@@ -80,8 +81,8 @@ OrderDirection không được suy diễn thành TradeSide nếu thiếu purpose
 | `IndicatorValues` | `ema20`, `ema50`, `ema200`, `ema20_slope_atr`, `ema50_slope_atr`, `ema200_slope_atr`, `rsi`, `rsi_slope`, `atr`, `atr_fraction`, `atr_percentile`, `adx`, `bb_upper`, `bb_middle`, `bb_lower`, `bb_width_fraction`, `bb_width_percentile`, `volume_mean`, `volume_ratio`: `Decimal` | Không NaN/infinite; ATR không âm; percentile/RSI/ADX trong `[0,100]`; bands có thứ tự |
 | `StructurePoint` | `kind: StructurePointKind`, `price: Decimal`, `time: datetime`, `candle_id: str`, `confirmed_at: datetime` | Chỉ dùng candle đã đóng; `confirmed_at >= time`; UTC |
 | `MarketStructure` | `trend: StructureTrend`, `points: tuple[StructurePoint,...]`, `as_of: datetime`, `reason_codes: tuple[ReasonCode,...]` | Point không sau `as_of`; UTC; immutable |
-| `RegimeEvidence` | `name: str`, `supports: MarketRegime`, `strength: Decimal`, `observed_value: Decimal`, `unit: str`, `rule_version: str`, `source_ids: tuple[str,...]` | Strength `[0,1]`; stable registered name; immutable |
-| `SignalEvidence` | `name: str`, `long_strength: Decimal`, `short_strength: Decimal`, `observed_value: Decimal`, `unit: str`, `source_ids: tuple[str,...]` | Strength `[0,1]`; stable registered name; immutable |
+| `RegimeEvidence` | `name: str`, `supports: MarketRegime`, `strength: Decimal`, `observed_value: Decimal`, `unit: str`, `rule_version: str`, `source_ids: tuple[str,...]` | `supports` chỉ nhận bốn candidate regimes, không nhận `UNCERTAIN`; strength `[0,1]`; stable registered name; immutable |
+| `SignalEvidence` | `name: str`, `long_strength: Decimal`, `short_strength: Decimal`, `long_observed_value: Decimal`, `short_observed_value: Decimal`, `unit: str`, `source_ids: tuple[str,...]` | Strength `[0,1]`; directional observed values không NaN/infinite; stable registered name; immutable |
 | `GateResult` | `gate_name: str`, `passed: bool`, `reason_code: ReasonCode?`, `observed_value: Decimal?`, `limit_value: Decimal?`, `unit: str?` | Failed gate phải có reason; stable registered name |
 | `Target` | `label: str`, `price: Decimal`, `quantity_fraction: Decimal` | Giá dương; fraction `(0,1]`; parent plan kiểm tra tổng fractions bằng 1 |
 | `ComponentHealth` | `component: str`, `status: HealthStatus`, `observed_at: datetime`, `reason_codes: tuple[ReasonCode,...]` | Một provider/repository chỉ báo health của chính nó; UTC; immutable |
@@ -176,6 +177,8 @@ Source: `regime`. Consumers: strategy, risk, journal, analytics.
 
 Validation: confidence và candidate scores `[0,1]`; score map có chính xác các keys
 `TREND_UP`, `TREND_DOWN`, `SIDEWAY`, `HIGH_VOLATILITY` (`UNCERTAIN` chỉ là outcome);
+`candidate_regime` chỉ nullable hoặc một trong bốn candidate regimes;
+`previous_confirmed_regime` chỉ nullable hoặc `TREND_UP/TREND_DOWN/SIDEWAY`;
 confirmation count không âm;
 evidence không rỗng cho regime xác định; evidence mâu thuẫn/không đủ phải cho
 `UNCERTAIN`; không có direction side effect.
@@ -244,8 +247,8 @@ Source: `levels`. Consumers: regime, strategy, journal.
 | `as_of` | `datetime` | No |
 | `config_version`, `data_version` | `str` | No |
 
-Validation: tất cả child cùng symbol và không sau `as_of`; active supports nằm dưới
-hoặc tại reference price, resistances ở trên hoặc tại reference price theo tolerance.
+Validation: tất cả child cùng symbol và không sau `as_of`; với reference close, active
+support phải có `zone_lower <= close`, active resistance phải có `zone_upper >= close`.
 
 ### 4.8 `SignalComponent`
 
@@ -255,14 +258,14 @@ Source: `strategy.scoring`. Consumers: assessment, journal, analytics.
 
 | Field | Type | Nullable |
 |---|---|---|
-| `component_name` | `str` | No |
+| `component_name` | `SignalComponentName` | No |
 | `long_points`, `short_points`, `max_points` | `Decimal` | No |
 | `evidence` | `tuple[SignalEvidence, ...]` | No |
 | `reason_codes` | `tuple[ReasonCode, ...]` | No |
 | `config_version` | `str` | No |
 
-Validation: points `[0,max_points]`; max points dương; tên thuộc configured registry;
-component không tự phát hành decision.
+Validation: points `[0,max_points]`; max points không âm; `max_points=0` bắt buộc cả
+hai points bằng zero; component không tự phát hành decision.
 
 ### 4.9 `SignalAssessment`
 
@@ -293,6 +296,8 @@ Source: `strategy.decision`. Consumers: risk, journal.
 |---|---|---|
 | `candidate_id`, `evaluation_id`, `symbol` | `str` | No |
 | `side` | `TradeSide` | No |
+| `regime` | `MarketRegime` | No |
+| `signal_score`, `opposite_score` | `Decimal` | No |
 | `entry_price`, `stop_price` | `Decimal` | No |
 | `targets` | `tuple[Target, ...]` | No |
 | `planned_rr_before_costs`, `planned_rr_after_costs` | `Decimal` | No |
@@ -308,9 +313,11 @@ Source: `strategy.decision`. Consumers: risk, journal.
 | `created_at` | `datetime` | No |
 | `versions` | `VersionSet` | No |
 
-Validation: prices dương; stop đúng phía; targets không rỗng và đúng phía entry;
-candidate không chứa quantity/leverage; regime không `UNCERTAIN/HIGH_VOLATILITY`;
-SIDEWAY middle không được tạo candidate.
+Validation: prices dương; scores `[0,100]`; `signal_score` khớp side đã chọn và
+`opposite_score` là score phía còn lại trong referenced assessment; stop đúng phía;
+targets không rỗng và đúng phía entry; candidate không chứa quantity/leverage; regime
+không `UNCERTAIN/HIGH_VOLATILITY`; `created_at` là evaluation `as_of` UTC (không dùng
+wall clock); SIDEWAY middle không được tạo candidate.
 
 ### 4.11 `RiskContext`
 

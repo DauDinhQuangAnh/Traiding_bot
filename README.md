@@ -6,8 +6,9 @@ an toàn không đủ rõ ràng.
 
 ## Trạng thái
 
-- PHASE 1 — Architecture + Flow: **APPROVED**
-- PHASE 2 — Technical Specification + Design Gate: **APPROVED**
+- PHASE 1 — **APPROVED**
+- PHASE 2 — Technical Specification: **COMPLETE**
+- PHASE 2 Design Gate — **APPROVED**
 - Phạm vi thị trường dự kiến: `BTC-USDT-SWAP`, OKX Demo Trading
 - Live trading: **không thuộc phạm vi hiện tại và phải luôn mặc định tắt**
 - Repository hiện chỉ chứa specification; chưa có mã kết nối hoặc gửi lệnh tới OKX.

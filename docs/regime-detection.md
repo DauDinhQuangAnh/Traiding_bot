@@ -6,7 +6,8 @@ Inputs:
 
 - Valid, closed-candle `MarketSnapshot`.
 - Ready `IndicatorSnapshot`.
-- Point-in-time `MarketStructure` and `LevelSet`.
+- Point-in-time `LevelSet` chứa canonical `MarketStructure` và optional `RangeContext`.
+- Prior `RegimeAssessment?` từ evaluation ngay trước của cùng symbol/config version.
 - Versioned `regime`/`levels` configuration.
 
 Output: immutable `RegimeAssessment`:
@@ -67,7 +68,8 @@ Mỗi evidence atom có:
 Candidate confidence là normalized aggregate theo công thức dưới đây; nó không phải
 xác suất thắng và không được dùng thay signal score.
 
-Các EMA/slope/ADX/price-location atoms được tính riêng cho `t ∈ {M15,H1}`, rồi:
+Canonical `MarketStructure` và `RangeContext` dùng `M15`. Các EMA/slope/ADX/
+price-location atoms được tính riêng cho `t ∈ {M15,H1}`, rồi:
 
 ```text
 tf_weighted(atom) = sum(atom[t] × regime.timeframe_weights[t])
@@ -101,7 +103,12 @@ trend_up_score = weighted_score(
    price_location: tf_weighted(price_up)},
   regime.weights.trend
 )
-trend_down_score = same formula with down evidence
+trend_down_score = weighted_score(
+  {ema: tf_weighted(ema_down), slope: tf_weighted(slope_down),
+   adx: tf_weighted(adx_trend), structure: structure_down,
+   price_location: tf_weighted(price_down)},
+  regime.weights.trend
+)
 ```
 
 SIDEWAY score:
@@ -131,7 +138,7 @@ HIGH_VOLATILITY score:
 ```text
 atr_extreme[t] = ramp_up(atr_percentile, atr_percentile_start, atr_percentile_full)
 bb_extreme[t] = ramp_up(bb_width_percentile, bb_percentile_start, bb_percentile_full)
-true_range_atr = current_closed_candle_true_range / atr
+true_range_atr = TR của trigger M15 candle / M15 atr
 range_shock = ramp_up(true_range_atr, true_range_atr_start, true_range_atr_full)
 high_volatility_score = weighted_score(
   {atr_percentile: tf_weighted(atr_extreme),
@@ -157,7 +164,8 @@ Evidence count dùng đúng các atom trong family score: trend có `ema`, `slop
 `bb_width_percentile`, `true_range_shock`. Không đếm lại cùng atom theo timeframe sau
 khi đã aggregate bằng `tf_weighted`.
 
-Algorithm canonical:
+Algorithm canonical; kết quả candidate tạm thời của bước 2–8 được gọi là
+`qualified_candidate` và persistence/count áp chính xác theo §6:
 
 1. Nếu input invalid/not-ready/stale → `UNCERTAIN`, confidence 0.
 2. Nếu HIGH_VOLATILITY qualified → `HIGH_VOLATILITY` ngay, không hysteresis.
@@ -169,10 +177,8 @@ Algorithm canonical:
 7. Nếu chỉ một candidate eligible → candidate đó.
 8. Nếu một trend và SIDEWAY cùng eligible: chọn score cao hơn chỉ khi absolute
    difference `>= regime.minimum_candidate_margin`; nếu không → `UNCERTAIN`.
-9. Candidate phải lặp đúng cùng regime trong `regime.required_confirmations`
-   evaluations liên tiếp. Trong lúc chờ, output `UNCERTAIN`; HIGH_VOLATILITY là
-   ngoại lệ an toàn ở bước 2.
-10. Candidate đổi hoặc bị gián đoạn reset confirmation count về 1; invalid input reset 0.
+9. Áp count/transition rule §6; trong lúc chờ output `UNCERTAIN`.
+10. HIGH_VOLATILITY là ngoại lệ an toàn, output ngay như bước 2 và §6.
 
 `RegimeAssessment.candidate_scores` có chính xác bốn keys `TREND_UP`, `TREND_DOWN`,
 `SIDEWAY`, `HIGH_VOLATILITY`; `UNCERTAIN` chỉ là outcome và không có score riêng.
@@ -210,11 +216,11 @@ Không suy ra TREND_DOWN chỉ vì RSI thấp hoặc một bearish candle.
 
 ### `SIDEWAY`
 
-Candidate cần nhiều evidence:
+SIDEWAY candidate dùng đúng năm evidence atoms và qualification rule ở §3–4:
 
 - `RangeContext` valid, đủ tuổi, width và boundary tests theo config.
 - EMA slopes/dispersion thể hiện thiếu directional expansion.
-- ADX/trend-strength candidate yếu theo configured rule.
+- `adx_weakness` được tính bằng configured `ramp_down`; không thêm ADX judgement khác.
 - Boundary test count/strength đạt exact rules ở §7 và structure là `MIXED` cho atom
   `bounded_structure`.
 - Range width đạt `levels.minimum_range_width_atr`; profitability sau costs được kiểm
@@ -248,26 +254,49 @@ Là fallback bắt buộc khi:
 
 ## 6. Regime transition stability
 
-Để tránh flip liên tục, detector bắt buộc dùng persistence theo config,
-nhưng state phải point-in-time và reproducible:
+Để tránh flip liên tục mà không dùng hidden state, detector nhận prior assessment cùng
+symbol và config version. Khác symbol/version được xử lý như không có prior.
 
-- `candidate_regime` được journal mỗi evaluation.
-- `confirmed_regime` chỉ đổi sau configured evidence/persistence rule.
-- Hysteresis không được giữ trend cũ khi high-volatility/data-invalid hard gate xuất hiện.
-- Restart khôi phục transition state từ journal; thiếu state → `UNCERTAIN`, không đoán.
+```text
+last_confirmed =
+  prior.regime, nếu prior.regime thuộc {TREND_UP, TREND_DOWN, SIDEWAY}
+  prior.previous_confirmed_regime, nếu prior.regime thuộc {UNCERTAIN, HIGH_VOLATILITY}
+  null, nếu không có prior
 
-Persistence parameters là `BACKTEST_REQUIRED` và phải đánh giá lag vs stability.
+candidate_count (chỉ cho TREND_UP, TREND_DOWN, SIDEWAY) =
+  min(regime.required_confirmations, prior.confirmation_count + 1),
+    nếu qualified_candidate == prior.candidate_regime và input/prior compatible
+  1, nếu có qualified_candidate nhưng không thỏa điều kiện trên
+  0, nếu input invalid, conflict hoặc eligible set rỗng
+```
+
+- Input invalid/conflict/no candidate: `regime=UNCERTAIN`, `candidate_regime=null`,
+  `confirmation_count=0`, giữ `previous_confirmed_regime=last_confirmed`.
+- Qualified HIGH_VOLATILITY: output ngay `regime=HIGH_VOLATILITY`,
+  `candidate_regime=HIGH_VOLATILITY`, `confirmation_count=1`, giữ last confirmed.
+- Candidate trend/SIDEWAY có count dưới `required_confirmations`: output
+  `regime=UNCERTAIN`, lưu candidate/count và last confirmed.
+- Candidate đạt count: output `regime=qualified_candidate`, lưu candidate/count và
+  `previous_confirmed_regime=last_confirmed`.
+- Hysteresis không được trả regime cũ khi high-volatility hoặc data-invalid hard gate.
+- Restart load prior assessment cuối từ journal; không khôi phục được thì dùng prior
+  null và bắt đầu confirmation count lại, không đoán.
+
+`required_confirmations` là `BACKTEST_REQUIRED`; cùng prior/input/config phải tạo cùng
+assessment và serialized transition state.
 
 ## 7. Level, structure và `RangeContext` construction
 
 ### Swing và market structure
 
+- Strategy V1 dùng duy nhất `snapshot.candles_15m` vì
+  `levels.structure_timeframe=M15`; 5m/1h không được trộn vào cùng structure sequence.
 - Swing high tại index `i` khi `high[i]` lớn hơn nghiêm ngặt mọi high trong
   `swing_left_bars` trước và `swing_right_bars` sau. Swing low đối xứng với `<`.
 - Pivot chỉ có hiệu lực khi toàn bộ right-side bars đã closed; `confirmed_at` là close
   time của right-side bar cuối.
 - Với hai swing highs và hai swing lows confirmed gần nhất, dùng tolerance
-  `level_merge_distance_atr × ATR`: latest high lớn hơn prior high + tolerance là HH,
+  `structure_comparison_tolerance_atr × M15 ATR`: latest high lớn hơn prior high + tolerance là HH,
   nhỏ hơn prior high - tolerance là LH; latest low tương tự là HL/LL. Trong tolerance
   được coi equal và không tạo directional label.
 - Thiếu hai confirmed highs hoặc lows → `UNDETERMINED`. HH + HL → `BULLISH`; LH + LL
@@ -278,11 +307,18 @@ Persistence parameters là `BACKTEST_REQUIRED` và phải đánh giá lag vs sta
 1. Tách swing highs và swing lows; sort từng tập theo `(price, confirmed_at, candle_id)`.
 2. Tạo deterministic connected clusters: hai pivot kề nhau thuộc cùng cluster khi
    price distance `<= level_merge_distance_atr × ATR(as_of)`.
-3. Cluster representative là median Decimal price; zone bằng representative
-   `± zone_half_width_atr × ATR`.
-4. `test_count` là số pivot unique; `strength = min(1,
-   test_count / full_strength_touches)`. Active khi test count và strength đạt config.
-5. Support là active swing-low level có price lớn nhất nhưng zone không nằm hoàn toàn
+3. Cluster representative là median Decimal price; count lẻ lấy middle item, count
+   chẵn lấy arithmetic mean của hai middle items. Zone bằng representative
+   `± zone_half_width_atr × ATR(as_of)`.
+4. `source_candle_ids` sort theo `(confirmed_at, candle_id)`;
+   `level_id = sha256(symbol | kind | method | ordered_source_candle_ids | config_version |
+   data_version)`. `first_observed_at` là min pivot time, `confirmed_at` và
+   `last_tested_at` lần lượt là max confirmation time của cluster tại revision hiện tại.
+5. `test_count` là số pivot unique; `strength = min(1,
+   test_count / levels.full_strength_touches)`. Active iff
+   `test_count >= levels.minimum_touches` và
+   `strength >= levels.minimum_level_strength`.
+6. Support là active swing-low level có price lớn nhất nhưng zone không nằm hoàn toàn
    trên close; nếu bằng giá, chọn `level_id` lexicographically nhỏ nhất. Resistance là
    active swing-high level có price nhỏ nhất nhưng zone không nằm hoàn toàn dưới close,
    với tie-break tương tự. Thiếu một phía → range invalid.
@@ -292,13 +328,14 @@ Required fields:
 - `support`, `resistance`, `range_width = resistance - support`.
 - `range_mid = (support + resistance) / 2`.
 - `position_in_range = (close - support) / range_width`.
-- `range_width_atr = range_width / reference_atr`.
+- `range_width_atr = range_width / M15 ATR tại as_of`.
 - `range_age_bars`, `support_tests`, `resistance_tests`.
 - `current_location`.
 - Breakout direction/state/timestamps và versions.
 
 `last_validated_at = min(support.last_tested_at, resistance.last_tested_at)`. Range
-valid khi boundaries active, `range_width > 0`, mỗi boundary đủ touches/strength,
+valid khi boundaries active, `range_width > 0`, `support.zone_upper <
+resistance.zone_lower`, mỗi boundary đủ touches/strength,
 `range_width_atr >= minimum_range_width_atr` và số 15m bars từ last validation
 `<= maximum_range_stale_bars`. ATR zero/invalid → `UNCERTAIN`; stale → NO_TRADE
 `RANGE_STALE`.
@@ -318,15 +355,16 @@ Với `p = position_in_range`, `s = support_zone_max_fraction`,
 - `NEAR_RESISTANCE` iff `r <= p <= 1 + o`.
 - `MIDDLE` iff `s < p < r`.
 
-Nếu zones overlap do range quá hẹp, RangeContext invalid; không chọn edge gần hơn.
+Nếu price zones của support/resistance overlap theo §7, RangeContext invalid; không
+chọn edge gần hơn.
 
 ## 8. SIDEWAY decision invariants
 
 | Condition | Allowed strategy action |
 |---|---|
 | `SIDEWAY + MIDDLE` | Chỉ `NO_TRADE`, reason `SIDEWAY_MIDDLE_RANGE` |
-| `SIDEWAY + NEAR_SUPPORT` | Chỉ cân nhắc LONG; vẫn cần confirmation, volume/momentum, score và RR |
-| `SIDEWAY + NEAR_RESISTANCE` | Chỉ cân nhắc SHORT; vẫn cần confirmation, volume/momentum, score và RR |
+| `SIDEWAY + NEAR_SUPPORT` | Chỉ cân nhắc LONG; vẫn cần confirmation, configured volume/momentum component gates, score và RR theo `strategy.md` |
+| `SIDEWAY + NEAR_RESISTANCE` | Chỉ cân nhắc SHORT với các gate đối xứng theo `strategy.md` |
 | `SIDEWAY + OUTSIDE_RANGE` | Không entry; chuyển breakout state machine |
 | Range invalid/too narrow | `NO_TRADE` |
 
@@ -360,9 +398,10 @@ Event invariants:
 - Confirmation chỉ dùng subsequent closed 15m bars. Up bar giữ khi close
   `>= resistance - breakout_hold_tolerance_atr × ATR`; down đối xứng. Mọi bar phải
   giữ; fail → `INVALIDATED`. Đủ `breakout_confirmation_bars` → `WAIT_RETEST`.
-- Up retest xảy ra khi low nằm trong boundary `± retest_tolerance_atr × ATR`, close
-  vẫn `>= resistance` và bullish candle confirmation theo `strategy.confirmation`.
-  Down retest dùng high quanh support, close `<= support` và bearish confirmation.
+- Up retest xảy ra khi M15 low nằm trong boundary `± retest_tolerance_atr × M15 ATR`,
+  M15 close vẫn `>= resistance`, và final child M5 candle có cùng close time đạt
+  bullish confirmation theo `strategy.confirmation`. Down retest dùng M15 high quanh
+  support, M15 close `<= support` và final child M5 đạt bearish confirmation.
 - Không retest trong `retest_expiry_bars` subsequent 15m bars → `EXPIRED`.
 - Candidate ID liên kết `range_id` và full transition history.
 - Restart/replay khôi phục đúng state từ append-only events.

@@ -39,8 +39,8 @@ tolerance làm data health degraded/unhealthy, không tự dịch timestamp đ�
 
 ## 4. Timeframe contract
 
-- `5m`: micro structure và confirmation; phải có đủ ba closed candles tương ứng với
-  interval 15m vừa đóng.
+- `5m`: micro context và Strategy confirmation; phải có đủ ba closed candles tương
+  ứng với interval 15m vừa đóng. Confirmation dùng child 5m cuối có cùng close time.
 - `15m`: timeframe entry và trigger duy nhất của evaluation định kỳ.
 - `1h`: context/regime; chỉ dùng candle 1h đã được source xác nhận `is_closed=true`.
 
@@ -169,6 +169,12 @@ Indicator set:
 - Bollinger Bands: upper/middle/lower, configured window/deviation; ordered values.
 - Volume statistics MVP: configured rolling arithmetic mean và ratio; không so volume
   giữa source/unit không tương thích.
+
+Đây là canonical indicator set của Strategy V1; không tự thêm indicator trong PHASE 3.
+Bollinger width/percentile chỉ phục vụ high-volatility safety score. Current volume và
+previous close lấy losslessly từ closed `Candle`; previous EMA state là internal
+calculation state. Chúng không được duplicate vào `IndicatorValues` vì slopes và
+current outputs cần cho decision đã có field canonical.
 
 Indicator algorithm, initialization method (SMA seed/Wilder/EMA variant), period,
 adjustment và rounding là một phần của `strategy_version`; cùng input/version phải

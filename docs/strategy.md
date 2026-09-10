@@ -12,8 +12,7 @@ Inputs cùng `evaluation_id/as_of/versions`:
 - `MarketSnapshot`
 - ready `IndicatorSnapshot`
 - `RegimeAssessment`
-- `LevelSet`/`RangeContext`
-- `MarketStructure`
+- `LevelSet` chứa canonical `MarketStructure` và optional `RangeContext`
 - Fee/slippage estimate interface cho planned RR
 
 Outputs:
@@ -31,29 +30,32 @@ không gọi Strategy. Với invocation hợp lệ, gate fail dẫn `NO_TRADE`; 
 1. Snapshot complete/fresh và indicator ready.
 2. Versions/as-of/symbol nhất quán.
 3. Regime không `UNCERTAIN`/blocked high volatility.
-4. Không có active position/pending candidate theo orchestration policy.
-5. Setup nằm trong regime/setup table tại §6.
-6. SIDEWAY location hợp lệ; middle bị block tuyệt đối.
-7. Breakout chỉ eligible sau `RETEST_VALIDATED`.
+4. Setup nằm trong regime/setup table tại §6.
+5. SIDEWAY location hợp lệ; middle bị block tuyệt đối.
+6. Breakout chỉ eligible sau `RETEST_VALIDATED`.
+
+Active-position, pending-intent và duplicate-evaluation gates thuộc orchestration/Risk,
+không thuộc Strategy vì Strategy không nhận account/order state.
 
 ## 3. Component model
 
 Canonical initial component registry:
 
-| Component | Candidate evidence | Constraint |
+| `SignalComponentName` | Evidence keys | Constraint |
 |---|---|---|
-| `trend_score` | 1h context, EMA structure/slope, regime alignment | Không duplicate toàn bộ regime confidence |
-| `momentum_score` | RSI/momentum behavior, non-extreme continuation/reversal context | RSI đơn lẻ không quyết định |
-| `structure_score` | Confirmed HH/HL hoặc LH/LL, pullback/invalidation geometry | Chỉ points confirmed tại `as_of` |
-| `level_score` | Proximity/quality của S/R, range location, target obstruction | SIDEWAY middle luôn gate fail |
-| `volume_score` | Relative volume/statistical confirmation | Cùng source/unit/window version |
-| `confirmation_score` | Closed candle rejection/continuation; breakout/retest state | Không dùng candle đang mở |
+| `TREND` | `regime_alignment`, `ema_alignment`, `pullback` | M15 signal geometry + confirmed regime; không tự quyết định trade |
+| `MOMENTUM` | `rsi`, `rsi_slope` | M15 RSI; RSI đơn lẻ không quyết định |
+| `STRUCTURE` | `market_structure` | Canonical M15 structure confirmed tại `as_of` |
+| `LEVEL` | `proximity` | Setup-specific selected level; SIDEWAY middle gate fail |
+| `VOLUME` | `volume_ratio` | M15 relative volume cùng source/unit/window version |
+| `CONFIRMATION` | `closed_candle` | Final child M5 candle đã đóng và kết thúc cùng trigger M15 |
 
 Mỗi `SignalComponent` lưu `component_name`, `long_points`, `short_points`,
 `max_points`, evidence, reason codes và config version. Points/weights là Decimal,
 không âm; tổng configured maxima đúng 100.
 
-Nếu component disabled, `max_points=0` và không được redistribute weight ngầm. Một
+`strategy.component_max_points` có đúng sáu enum keys và tổng 100. Nếu component
+disabled, `max_points=0`, evidence weights rỗng và không redistribute ngầm. Một
 experiment muốn redistribute phải có config/strategy version mới.
 
 Các hàm canonical dùng chung:
@@ -64,36 +66,86 @@ ramp_up(x, start, full) = clamp01((x - start) / (full - start))
 ramp_down(x, full, zero) = 1 - ramp_up(x, full, zero)
 ```
 
-Với mỗi direction, evidence strength được tính chính xác:
+Notation canonical cho Strategy V1:
 
-| Component | LONG evidence strengths | SHORT evidence strengths |
+```text
+c15 = trigger 15m candle = last(snapshot.candles_15m), c15.close_time = snapshot.as_of
+c5 = last(snapshot.candles_5m), c5.close_time = c15.close_time
+i = indicators.values_by_timeframe[M15]
+s = level_set.market_structure                 # levels.structure_timeframe = M15
+r = regime_assessment
+setup, setup_side = kết quả duy nhất của §6
+band = strategy.momentum.rsi_bands[setup]
+```
+
+Selected signal level được xác định trước scoring:
+
+- `TREND_PULLBACK/LONG`: active support có `zone_lower <= c15.close`, chọn price lớn
+  nhất, tie chọn `level_id` lexicographically nhỏ nhất. SHORT đối xứng với active
+  resistance có `zone_upper >= c15.close`, price nhỏ nhất, cùng tie-break.
+- `SIDEWAY_MEAN_REVERSION`: LONG dùng range support; SHORT dùng range resistance.
+- `BREAKOUT_RETEST`: LONG dùng resistance boundary vừa retest; SHORT dùng support
+  boundary vừa retest.
+
+```text
+distance_to_selected_level_atr =
+  0, nếu zone_lower <= c15.close <= zone_upper
+  min(abs(c15.close-zone_lower), abs(c15.close-zone_upper)) / i.atr, nếu ngoài zone
+```
+
+Với `i.atr > 0`, evidence strength được tính chính xác như sau; mọi strength không
+được liệt kê cho direction/setup hiện tại bằng zero:
+
+| Component / evidence key | LONG strength | SHORT strength |
 |---|---|---|
-| `trend_score` | Confirmed TREND_UP candidate score; EMA-up binary; pullback proximity `ramp_down(abs(close-ema20)/atr, 0, trend_pullback_tolerance_atr)` | Đối xứng với TREND_DOWN |
-| `momentum_score` | `ramp_up(rsi, rsi_long_start, rsi_long_full)` và `ramp_up(rsi_slope, 0, rsi_slope_full)` | `ramp_down(rsi, rsi_short_full, rsi_short_start)` và `ramp_up(-rsi_slope, 0, rsi_slope_full)` |
-| `structure_score` | 1 iff structure BULLISH, else 0 | 1 iff structure BEARISH, else 0 |
-| `level_score` | `ramp_down(distance_to_valid_support_atr, level_full_strength_distance_atr, level_zero_strength_distance_atr)` | Dùng distance tới valid resistance đối xứng |
-| `volume_score` | `ramp_up(volume_ratio, ratio_start, ratio_full)` khi LONG confirmation true, else 0 | Cùng formula khi SHORT confirmation true |
-| `confirmation_score` | 1 iff bullish confirmation rule pass, else 0 | 1 iff bearish confirmation rule pass, else 0 |
+| `TREND.regime_alignment` | `r.candidate_scores[TREND_UP]` iff `r.regime=TREND_UP` và setup LONG, else 0 | `r.candidate_scores[TREND_DOWN]` iff `r.regime=TREND_DOWN` và setup SHORT, else 0 |
+| `TREND.ema_alignment` | 1 iff aligned TREND_UP setup và `i.ema20 > i.ema50 > i.ema200`, else 0 | 1 iff aligned TREND_DOWN setup và `i.ema20 < i.ema50 < i.ema200`, else 0 |
+| `TREND.pullback` | `ramp_down(abs(c15.close-i.ema20)/i.atr, 0, strategy.trend_pullback_tolerance_atr)` iff aligned TREND_UP setup, else 0 | Cùng formula iff aligned TREND_DOWN setup, else 0 |
+| `MOMENTUM.rsi` | 1 iff `band.long_min <= i.rsi <= band.long_max`, else 0 | 1 iff `band.short_min <= i.rsi <= band.short_max`, else 0 |
+| `MOMENTUM.rsi_slope` | `ramp_up(i.rsi_slope, 0, strategy.momentum.rsi_slope_full)` | `ramp_up(-i.rsi_slope, 0, strategy.momentum.rsi_slope_full)` |
+| `STRUCTURE.market_structure` | 1 iff `s.trend=BULLISH`, else 0 | 1 iff `s.trend=BEARISH`, else 0 |
+| `LEVEL.proximity` | `ramp_down(distance_to_selected_level_atr, strategy.level_full_strength_distance_atr, strategy.level_zero_strength_distance_atr)` iff selected LONG level exists, else 0 | Cùng formula iff selected SHORT level exists, else 0 |
+| `VOLUME.volume_ratio` | `ramp_up(i.volume_ratio, strategy.volume.ratio_start, strategy.volume.ratio_full)` iff bullish confirmation true, else 0 | Cùng ramp iff bearish confirmation true, else 0 |
+| `CONFIRMATION.closed_candle` | 1 iff bullish confirmation below is true, else 0 | 1 iff bearish confirmation below is true, else 0 |
 
-Trong BREAKOUT_RETEST, valid level là boundary vừa retest. Trong
-SIDEWAY_MEAN_REVERSION, đó là range support/resistance. Trong TREND_PULLBACK, đó là
-nearest active directional S/R level. Thiếu level → strength 0 và candidate builder
-sau đó fail nếu không có invalidation anchor.
+SIDEWAY đặt toàn bộ `TREND` evidence hai phía bằng zero. Missing selected level đặt
+`LEVEL.proximity=0`; candidate builder sau đó fail nếu thiếu invalidation anchor.
+`i.volume_ratio` chỉ tồn tại khi configured volume mean dương và đủ history; nếu không,
+Indicator Engine trả not-ready/invalid và Strategy không được gọi.
+
+Mỗi row/evidence key tạo một `SignalEvidence`: `long_observed_value` và
+`short_observed_value` là hai directional operands cuối trước normalize (binary 0/1,
+RSI, signed RSI slope, ATR distance hoặc volume ratio). `unit` là `binary`,
+`rsi_point`, `atr_multiple` hoặc `ratio`; `source_ids` chứa trigger candle, indicator
+assessment, regime/level IDs đã dùng. Không được tạo evidence chỉ bằng text.
 
 Mỗi component dùng:
 
 ```text
 component_strength(direction) =
-  sum(evidence_strength[name] × configured_evidence_weight[name])
-component_points(direction) = max_points × component_strength(direction)
+  sum(evidence_strength[name]
+      × strategy.component_evidence_weights[component][name])
+component_points(direction) =
+  strategy.component_max_points[component] × component_strength(direction)
 ```
 
 Evidence weights của component phải tổng 1. `SignalEvidence` lưu từng operand,
 strength và source IDs; không chỉ lưu câu mô tả.
 
+Khi một setup yêu cầu component strength dương, gate canonical là:
+
+```text
+directional_component_gate(component, direction) =
+  strategy.component_max_points[component] == 0
+  OR component_points(direction) > 0
+```
+
+Vì vậy disable component bằng max points zero cũng disable riêng gate của component đó;
+không có khái niệm optional evidence ngầm.
+
 ### Closed-candle confirmation
 
-Với trigger candle 15m:
+Với `c5`, tức 5m confirmation candle cuối cùng nằm trọn trong trigger 15m:
 
 ```text
 candle_range = high - low
@@ -181,19 +233,24 @@ Setup selection is deterministic and returns at most one setup:
 7. Mọi case còn lại → none/NO_TRADE. BREAKOUT_RETEST precedes mean reversion so one
    evaluation cannot emit two candidates.
 
+Sau khi chọn theo thứ tự trên, setup chỉ đi tiếp nếu nằm trong
+`strategy.allowed_setups`; nếu không trả `NO_TRADE` + `SETUP_DISABLED`.
+
 ### Trend
 
 - TREND_UP: chỉ setup LONG theo trend trong MVP.
 - TREND_DOWN: chỉ setup SHORT theo trend trong MVP.
 - Counter-trend score có thể được tính để diagnostic nhưng bị regime gate block.
-- Pullback pass khi `abs(close - ema20) / atr <= trend_pullback_tolerance_atr`;
+- Pullback pass khi `abs(c15.close - i.ema20) / i.atr <=
+  strategy.trend_pullback_tolerance_atr`;
   opposing level phải cho target hợp lệ theo §7. ATR invalid → NO_TRADE.
 
 ### SIDEWAY mean reversion
 
 - `MIDDLE`: luôn `NO_TRADE`; không gọi candidate builder.
-- `NEAR_SUPPORT`: chỉ LONG nếu bullish closed-candle confirmation, volume/momentum
-  component strengths dương, scores, confluence và cost-adjusted RR pass.
+- `NEAR_SUPPORT`: chỉ LONG nếu bullish closed-candle confirmation,
+  `directional_component_gate` của `VOLUME` và `MOMENTUM`, scores, confluence và
+  cost-adjusted RR pass.
 - `NEAR_RESISTANCE`: chỉ SHORT với điều kiện đối xứng.
 - Overlapping edge zones/range invalid: `NO_TRADE`, không chọn nearest side.
 
@@ -209,7 +266,9 @@ HIGH_VOLATILITY và UNCERTAIN không tạo candidate bất kể score.
 
 ## 7. Candidate construction
 
-Thứ tự bắt buộc:
+Candidate builder chỉ được gọi khi market snapshot hợp lệ, indicators ready, regime
+không blocked, setup/side duy nhất, score/confluence/advantage pass và confirmation
+pass. Thứ tự bắt buộc:
 
 1. Chọn eligible direction và `SetupType` từ regime/location/breakout gates.
 2. Với `EntryModel.CLOSE_REFERENCE`, `entry_price` bằng close của trigger 15m. Đây là
@@ -225,8 +284,9 @@ Thứ tự bắt buộc:
    buffer.
    Không có anchor/ATR hợp lệ → `INVALID_STOP`.
 5. Với `TargetModel.NEXT_OPPOSING_LEVEL`: LONG chọn active resistance có
-   `zone_lower > entry` nhỏ nhất; target = `zone_lower`. SHORT chọn active support có
-   `zone_upper < entry` lớn nhất; target = `zone_upper`. Không có target →
+   `zone_lower > entry` nhỏ nhất, tie chọn `level_id` lexicographically nhỏ nhất;
+   target = `zone_lower`. SHORT chọn active support có `zone_upper < entry` lớn nhất,
+   cùng tie-break; target = `zone_upper`. Không có target →
    `TARGET_INVALID`. SIDEWAY ưu tiên boundary đối diện vì đó chính là nearest level.
 6. Validate direction: LONG `stop < entry < target`; SHORT `target < entry < stop`.
 7. Lấy `CostRateEstimate` từ FeeModel cho cùng symbol/as_of/version, dùng conservative
@@ -247,8 +307,9 @@ planned_rr_after_costs = planned_reward_fraction / planned_loss_fraction
 ```
 
 9. Denominator/reward không dương hoặc RR dưới `risk.minimum_rr` → `RR_TOO_LOW`.
-10. Phát immutable `TradeCandidate` không có quantity/leverage; attach selected level
-    IDs, `CostRateEstimate`, setup/entry/target enums và versions.
+10. Phát immutable `TradeCandidate` không có quantity/leverage; attach confirmed
+    regime, selected/opposite scores, assessment/level IDs, `CostRateEstimate`,
+    setup/entry/target enums, reason metadata và versions.
 
 Strategy không được kéo stop gần entry hoặc bỏ level cản để tăng RR. Risk Engine sẽ
 tính lại bằng fresh context và là kết quả authoritative; bất kỳ invariant/version gate
@@ -272,7 +333,8 @@ con người. Không parse free text ngược lại để điều khiển logic.
 - Input/gate: `INDICATOR_NOT_READY`, `REGIME_UNCERTAIN`,
   `HIGH_VOLATILITY_BLOCKED`, `REGIME_DIRECTION_BLOCKED`.
 - SIDEWAY: `SIDEWAY_MIDDLE_RANGE`, `RANGE_INVALID`, `NO_CONFIRMATION`,
-  `BREAKOUT_CONFIRMATION_PENDING`, `RETEST_PENDING`, `RETEST_INVALIDATED`, `RETEST_EXPIRED`.
+  `SETUP_DISABLED`, `BREAKOUT_CONFIRMATION_PENDING`, `RETEST_PENDING`,
+  `RETEST_INVALIDATED`, `RETEST_EXPIRED`.
 - Score: `SCORE_TOO_LOW`, `SCORE_DIFFERENCE_TOO_SMALL`, `AMBIGUOUS_SIGNAL`, `SIGNAL_INVALID`.
 - Plan: `INVALID_STOP`, `TARGET_INVALID`, `LEVEL_TOO_CLOSE`, `RR_TOO_LOW`.
 
