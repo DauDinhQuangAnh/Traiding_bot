@@ -62,7 +62,8 @@ Normalization:
 
 - Map symbol/timeframe/status sang canonical enum/value.
 - Parse price/volume trực tiếp thành Decimal từ chuỗi; không đi qua float.
-- Gắn `source`, event/receive time và deterministic candle ID.
+- Gắn `source`, event/receive time và deterministic candle ID:
+  `sha256(source | symbol | timeframe | canonical_open_time)`.
 - Preserve raw event immutable để audit/replay; normalized correction là version mới.
 
 ## 6. Deduplication và ordering
@@ -77,7 +78,7 @@ Cùng key nhưng payload khác là correction/conflict:
    decision. Backtest mới dùng data version mới.
 4. Live/demo đang chạy phải block evaluation cho tới khi conflict được resolve.
 
-Out-of-order event nằm trong configured ordering window được buffer và sắp theo
+Out-of-order event nằm trong `data.ordering_window` được buffer và sắp theo
 `event_time`/sequence. Ngoài window tạo `DATA_OUT_OF_ORDER`; không đưa vào snapshot
 cho đến khi consistency được xác minh.
 
@@ -90,7 +91,8 @@ Thiếu một interval tạo `DATA_GAP` và pipeline:
 2. Chặn snapshot/evaluation bị ảnh hưởng.
 3. Yêu cầu backfill từ provider.
 4. Validate/dedupe backfill như dữ liệu thường.
-5. Vượt retry/health policy → `DATA_UNHEALTHY` và có thể `HALT`.
+5. Vượt `data.max_backfill_attempts` → `DATA_UNHEALTHY`, phát `HEALTH_CRITICAL` và
+   chuyển global bot state sang `HALTED`.
 
 Không tạo synthetic candle zero-volume để lấp gap. Market closure không được giả
 định cho thị trường BTC 24/7 nếu không có source evidence.
@@ -158,39 +160,106 @@ Output: một `IndicatorSnapshot` immutable cùng `as_of`, snapshot ID và versi
 
 Indicator set:
 
-- EMA20, EMA50, EMA200: value, slope/normalized distance có thể được derived bởi
-  regime layer nhưng phải point-in-time.
+- EMA20, EMA50, EMA200 và ATR-normalized slopes là point-in-time fields của
+  `IndicatorSnapshot`.
 - RSI: canonical configured method/period; value `[0,100]`.
 - ATR: configured method/period; Decimal không âm, cùng price unit.
 - ADX: configured method/period; value `[0,100]`; directional indices nếu dùng phải
   được thêm vào typed auxiliary contract.
 - Bollinger Bands: upper/middle/lower, configured window/deviation; ordered values.
-- Volume statistics: rolling mean/median/ratio/dispersion theo fields được config và
-  version hóa; không so volume giữa source/unit không tương thích.
+- Volume statistics MVP: configured rolling arithmetic mean và ratio; không so volume
+  giữa source/unit không tương thích.
 
 Indicator algorithm, initialization method (SMA seed/Wilder/EMA variant), period,
 adjustment và rounding là một phần của `strategy_version`; cùng input/version phải
 cho output giống nhau.
 
-## 12. Warm-up requirements
+### 11.1 Canonical formulas
 
-Engine tính derived minimum history cho từng timeframe:
+All operations use Decimal với `calculation.decimal_precision` và
+`calculation.rounding_mode`, giữ context đó đến model/storage serialization; không
+exchange-tick rounding ở bước indicator.
 
 ```text
-required_bars(timeframe) = max(
-    ema_max_period + ema_stabilization_bars,
-    rsi_required_bars,
-    atr_required_bars,
-    adx_required_bars,
-    bollinger_required_bars,
-    volume_required_bars,
-    structure_required_bars
-)
+EMA seed at index period-1 = arithmetic mean(first period closes)
+alpha = 2 / (period + 1)
+EMA[t] = alpha × close[t] + (1 - alpha) × EMA[t-1]
+ema_slope_atr[t] = (EMA[t] - EMA[t-slope_lookback_bars]) / ATR[t]
 ```
 
-EMA200 cần ít nhất period history, nhưng stabilization buffer là
-`BACKTEST_REQUIRED`; không khẳng định đúng một giá trị chung. ADX/RSI/ATR warm-up
-phụ thuộc phương pháp initialization đã chọn và phải có test fixture xác nhận.
+EMA periods are exactly 20/50/200 from config validation. ATR zero makes normalized
+slope invalid; no epsilon substitution.
+
+RSI uses canonical Wilder smoothing:
+
+```text
+gain[t] = max(close[t] - close[t-1], 0)
+loss[t] = max(close[t-1] - close[t], 0)
+first_avg_gain/loss = arithmetic mean(first period gain/loss values)
+later_avg = (previous_avg × (period - 1) + current_value) / period
+RS = avg_gain / avg_loss
+RSI = 100 - 100 / (1 + RS)
+```
+
+If both averages are zero, RSI = 50; only loss zero gives 100; only gain zero gives 0.
+`rsi_slope = RSI[t] - RSI[t-rsi.slope_lookback_bars]`.
+
+ATR uses true range and Wilder smoothing:
+
+```text
+TR[t] = max(high-low, abs(high-prev_close), abs(low-prev_close))
+first_ATR = arithmetic mean(first period TR values)
+ATR[t] = (previous_ATR × (period - 1) + TR[t]) / period
+atr_fraction = ATR[t] / close[t]
+```
+
+ADX uses Wilder +DM/-DM/TR smoothing: directional movement keeps only the larger
+positive up/down move, DI is `100 × smoothed_DM / smoothed_TR`, DX is
+`100 × abs(+DI - -DI) / (+DI + -DI)`, and first ADX is arithmetic mean of the first
+period DX values; later ADX uses Wilder recurrence. Zero denominator gives DX 0.
+
+Bollinger Bands use population standard deviation over the configured close window:
+
+```text
+middle = arithmetic_mean(closes)
+variance = sum((close-middle)^2) / period
+upper/lower = middle ± stddev_multiplier × sqrt(variance)
+bb_width_fraction = (upper-lower) / middle
+```
+
+Volume statistic `MEAN` uses arithmetic mean over the configured closed-candle window;
+`volume_ratio = current_volume / volume_mean`. Zero mean is `INDICATOR_INVALID`.
+
+ATR and BB percentiles use an inclusive empirical CDF over the configured trailing
+derived-value window, including current value:
+
+```text
+percentile = 100 × count(window_value <= current_value) / window_count
+```
+
+No interpolation or future-fitted distribution is allowed.
+
+## 12. Warm-up requirements
+
+Engine tính conservative derived minimum history cho từng timeframe:
+
+```text
+ema_required = 200 + ema_stabilization_bars + ema_slope_lookback_bars
+rsi_required = rsi.period + 1 + rsi.slope_lookback_bars
+atr_required = atr.period + 1
+adx_required = 2 × adx.period + 1
+bb_required = bollinger.period
+volume_required = volume.lookback_bars
+atr_percentile_required = atr_required + atr.percentile_lookback_bars - 1
+bb_percentile_required = bb_required + bollinger.percentile_lookback_bars - 1
+structure_required = levels.lookback_bars[timeframe]
+
+required_bars(timeframe) = max(all values above)
+```
+
+`data.warmup_candles[timeframe]` và `data.history_bars[timeframe]` đều phải lớn hơn
+hoặc bằng derived requirement. Stabilization/lookbacks/periods là versioned config;
+formula readiness không thay đổi theo runtime judgement.
 
 Nếu bất kỳ required series/indicator nào thiếu:
 
@@ -206,7 +275,7 @@ Nếu bất kỳ required series/indicator nào thiếu:
 - `stream_events(symbols, timeframes) -> async events`
 - `fetch_candles(symbol, timeframe, start, end, limit) -> candles`
 - `fetch_latest_quote(symbol) -> Quote`
-- `health() -> HealthSnapshot`
+- `health() -> ComponentHealth`
 
 `Clock` contract: `now_utc()` và monotonic elapsed time cho timeout. Domain không gọi
 system clock trực tiếp. Provider implementation/specific OKX schema nằm ngoài domain.

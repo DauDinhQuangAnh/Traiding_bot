@@ -7,7 +7,7 @@ an toàn không đủ rõ ràng.
 ## Trạng thái
 
 - PHASE 1 — Architecture + Flow: **APPROVED**
-- PHASE 2 — Technical Specification: **COMPLETE — AWAITING USER REVIEW**
+- PHASE 2 — Technical Specification + Design Gate: **APPROVED**
 - Phạm vi thị trường dự kiến: `BTC-USDT-SWAP`, OKX Demo Trading
 - Live trading: **không thuộc phạm vi hiện tại và phải luôn mặc định tắt**
 - Repository hiện chỉ chứa specification; chưa có mã kết nối hoặc gửi lệnh tới OKX.
@@ -29,5 +29,9 @@ an toàn không đủ rõ ràng.
 - [Strategy and Signal Scoring](docs/strategy.md)
 - [Position Sizing and Fee Model](docs/position-sizing.md)
 - [Error and Reason Codes](docs/error-and-reason-codes.md)
+- [PHASE 2 Review](docs/phase-2-review.md)
 
-Không bắt đầu PHASE 3 trước khi PHASE 2 được người dùng review và chấp thuận.
+## Tiếp theo
+
+PHASE 3 — Project Scaffold + Core Domain Implementation. Chưa bắt đầu trong thay đổi
+này; repository vẫn không có kết nối OKX, API key, order submission hoặc trading loop.

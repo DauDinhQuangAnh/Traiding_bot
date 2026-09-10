@@ -33,11 +33,14 @@ sort key, giữ Decimal dưới dạng string và normalize duration/timeframe. 
 | Group | Responsibility |
 |---|---|
 | `market` | Instrument, environment, account/margin assumptions |
+| `calculation` | Decimal arithmetic context và canonical rounding |
 | `strategy` | Score components, gates, entry/target behavior |
+| `indicators` | Indicator algorithms, periods, warm-up và derived fields |
 | `regime` | Multi-evidence regime candidates/conflict policy |
 | `levels` | S/R, range, structure, breakout/retest parameters |
 | `risk` | Risk budget, caps, limits, stop/RR policy |
 | `execution` | Dry-run, approval TTL, timeout, partial-fill/emergency policy |
+| `protection` | Stop/TP validation và failure actions |
 | `data` | Timeframes, warm-up, freshness, gap/backfill policy |
 | `journal` | SQLite path, append/audit behavior, retention |
 | `monitoring` | Health thresholds, alerts, reconciliation cadence |
@@ -54,11 +57,18 @@ Notation: `DecimalRatio` là Decimal trong `[0,1]` trừ khi field ghi khác;
 | `market.symbol` | `str` | DEFAULT_FOR_DEVELOPMENT | `BTC-USDT-SWAP`; non-empty |
 | `market.environment` | `ExecutionEnvironment` | DEFAULT_FOR_DEVELOPMENT | Chỉ `BACKTEST` hoặc `DEMO` được phép trong MVP |
 | `market.quote_currency` | `str` | DEFAULT_FOR_DEVELOPMENT | `USDT`; phải khớp instrument metadata |
-| `market.position_mode` | enum | BACKTEST_REQUIRED | `NET` hoặc `LONG_SHORT`; cần chốt trước adapter |
-| `market.margin_mode` | enum | BACKTEST_REQUIRED | `ISOLATED` hoặc `CROSS`; cần chốt trước adapter |
-| `market.timezone` | IANA timezone | DEFAULT_FOR_DEVELOPMENT | Storage/event time vẫn UTC |
+| `market.position_mode` | `PositionMode` | BACKTEST_REQUIRED | `NET` hoặc `LONG_SHORT`; cần chốt trước adapter |
+| `market.margin_mode` | `MarginMode` | BACKTEST_REQUIRED | `ISOLATED` hoặc `CROSS`; cần chốt trước adapter |
+| `market.timezone` | IANA timezone | DEFAULT_FOR_DEVELOPMENT | `UTC`; chỉ dùng presentation/session declaration, storage vẫn UTC |
 
-### 4.2 `strategy`
+### 4.2 `calculation`
+
+| Key | Type | Class | Validation/meaning |
+|---|---|---|---|
+| `calculation.decimal_precision` | `int` | DEFAULT_FOR_DEVELOPMENT | `34`; phải `>= 28`, áp cho domain calculations trước serialization |
+| `calculation.rounding_mode` | `DecimalRoundingMode` | DEFAULT_FOR_DEVELOPMENT | `ROUND_HALF_EVEN`; exchange quantization vẫn dùng adverse rules riêng |
+
+### 4.3 `strategy`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
@@ -66,51 +76,115 @@ Notation: `DecimalRatio` là Decimal trong `[0,1]` trừ khi field ghi khác;
 | `strategy.long_threshold` | `Decimal` | BACKTEST_REQUIRED | `[0,100]` |
 | `strategy.short_threshold` | `Decimal` | BACKTEST_REQUIRED | `[0,100]` |
 | `strategy.minimum_score_difference` | `Decimal` | BACKTEST_REQUIRED | `[0,100]` |
-| `strategy.component_weights` | `Mapping[str, Decimal]` | BACKTEST_REQUIRED | Không âm; configured maxima tổng đúng 100 |
-| `strategy.allowed_setups` | `set[str]` | BACKTEST_REQUIRED | Registry có version; unknown setup invalid |
-| `strategy.entry_model` | enum | BACKTEST_REQUIRED | Contract, không chứa exchange order type |
-| `strategy.target_model` | enum | BACKTEST_REQUIRED | MVP một target; multi-target disabled mặc định |
+| `strategy.components.<name>.max_points` | `Decimal` | BACKTEST_REQUIRED | Sáu component canonical; không âm, tổng đúng 100 |
+| `strategy.components.<name>.evidence_weights` | `Mapping[str, Decimal]` | BACKTEST_REQUIRED | Không âm, tổng đúng 1 trong component |
+| `strategy.minimum_nonzero_components` | `int` | BACKTEST_REQUIRED | Minimum confluence; trong `[1,6]` |
+| `strategy.allowed_setups` | `set[SetupType]` | BACKTEST_REQUIRED | Subset enum; không dùng free string |
+| `strategy.entry_model` | `EntryModel` | DEFAULT_FOR_DEVELOPMENT | MVP: `CLOSE_REFERENCE` |
+| `strategy.target_model` | `TargetModel` | DEFAULT_FOR_DEVELOPMENT | MVP: `NEXT_OPPOSING_LEVEL` |
+| `strategy.trend_pullback_tolerance_atr` | `Decimal` | BACKTEST_REQUIRED | Dương; khoảng cách close tới EMA/structure |
+| `strategy.stop.atr_buffer` | `Decimal` | BACKTEST_REQUIRED | Không âm; buffer Strategy dùng để dựng candidate stop quanh structural anchor |
+| `strategy.level_full_strength_distance_atr` | `Decimal` | BACKTEST_REQUIRED | Không âm, `< level_zero_strength_distance_atr` |
+| `strategy.level_zero_strength_distance_atr` | `Decimal` | BACKTEST_REQUIRED | Dương |
+| `strategy.momentum.rsi_long_start`, `strategy.momentum.rsi_long_full` | `Decimal` | BACKTEST_REQUIRED | `[0,100]`, start < full |
+| `strategy.momentum.rsi_short_full`, `strategy.momentum.rsi_short_start` | `Decimal` | BACKTEST_REQUIRED | `[0,100]`, full < start |
+| `strategy.momentum.rsi_slope_full` | `Decimal` | BACKTEST_REQUIRED | Dương; symmetric long/short magnitude |
+| `strategy.volume.ratio_start`, `strategy.volume.ratio_full` | `Decimal` | BACKTEST_REQUIRED | Dương; start < full |
+| `strategy.confirmation.minimum_body_fraction` | `DecimalRatio` | BACKTEST_REQUIRED | Candle body/range lower bound |
+| `strategy.confirmation.minimum_rejection_wick_fraction` | `DecimalRatio` | BACKTEST_REQUIRED | Wick/range lower bound |
+| `strategy.confirmation.long_close_location_min` | `DecimalRatio` | BACKTEST_REQUIRED | Close location lower bound |
+| `strategy.confirmation.short_close_location_max` | `DecimalRatio` | BACKTEST_REQUIRED | Close location upper bound |
 | `strategy.high_volatility_enabled` | `bool` | DEFAULT_FOR_DEVELOPMENT | Phải `false`; bật yêu cầu strategy/backtest riêng |
 
-### 4.3 `regime`
+Canonical component/evidence keys: `trend_score` dùng `regime_alignment`,
+`ema_alignment`, `pullback`; `momentum_score` dùng `rsi`, `rsi_slope`;
+`structure_score` dùng `market_structure`; `level_score` dùng `proximity`;
+`volume_score` dùng `volume_ratio`; `confirmation_score` dùng `closed_candle`.
+Thiếu/thừa key là config error, không tự normalize.
+
+### 4.4 `indicators`
+
+| Key | Type | Class | Validation/meaning |
+|---|---|---|---|
+| `indicators.ema.periods` | `tuple[int,int,int]` | DEFAULT_FOR_DEVELOPMENT | Chính xác `[20,50,200]`, tăng dần |
+| `indicators.ema.slope_lookback_bars` | `int` | BACKTEST_REQUIRED | Positive |
+| `indicators.ema.stabilization_bars` | `int` | BACKTEST_REQUIRED | Non-negative; cộng EMA200 warm-up |
+| `indicators.rsi.period` | `int` | BACKTEST_REQUIRED | Positive |
+| `indicators.rsi.method` | `SmoothingMethod` | DEFAULT_FOR_DEVELOPMENT | `WILDER`; đổi method đổi strategy version |
+| `indicators.rsi.slope_lookback_bars` | `int` | BACKTEST_REQUIRED | Positive |
+| `indicators.atr.period` | `int` | BACKTEST_REQUIRED | Positive |
+| `indicators.atr.method` | `SmoothingMethod` | DEFAULT_FOR_DEVELOPMENT | `WILDER` |
+| `indicators.atr.percentile_lookback_bars` | `int` | BACKTEST_REQUIRED | Positive và lớn hơn ATR period |
+| `indicators.adx.period` | `int` | BACKTEST_REQUIRED | Positive |
+| `indicators.adx.method` | `SmoothingMethod` | DEFAULT_FOR_DEVELOPMENT | `WILDER` |
+| `indicators.bollinger.period` | `int` | BACKTEST_REQUIRED | Positive |
+| `indicators.bollinger.stddev_multiplier` | `Decimal` | BACKTEST_REQUIRED | Dương |
+| `indicators.bollinger.percentile_lookback_bars` | `int` | BACKTEST_REQUIRED | Positive và lớn hơn band period |
+| `indicators.volume.lookback_bars` | `int` | BACKTEST_REQUIRED | Positive |
+| `indicators.volume.statistic` | `VolumeStatistic` | DEFAULT_FOR_DEVELOPMENT | `MEAN`; zero mean → indicator invalid |
+
+### 4.5 `regime`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
 | `regime.minimum_evidence_count` | `int` | BACKTEST_REQUIRED | `>= 2`; tránh single-indicator rule |
+| `regime.minimum_evidence_strength` | `DecimalRatio` | BACKTEST_REQUIRED | Evidence được đếm khi strength `>=` giá trị này |
 | `regime.minimum_confidence` | `DecimalRatio` | BACKTEST_REQUIRED | Dưới mức này → `UNCERTAIN` |
+| `regime.minimum_candidate_margin` | `DecimalRatio` | BACKTEST_REQUIRED | Margin tối thiểu khi trend/range cùng eligible |
 | `regime.conflict_tolerance` | `DecimalRatio` | BACKTEST_REQUIRED | Evidence conflict vượt mức → `UNCERTAIN` |
-| `regime.adx.*` | typed Decimal fields | BACKTEST_REQUIRED | Trend-strength candidate, không tự quyết regime |
-| `regime.ema_structure.*` | typed fields | BACKTEST_REQUIRED | Alignment/slope/distance candidates |
-| `regime.volatility.*` | typed Decimal fields | BACKTEST_REQUIRED | ATR/BB expansion percentiles/windows |
-| `regime.structure.*` | typed fields | BACKTEST_REQUIRED | Swing confirmation/lookback |
-| `regime.sideway.*` | typed fields | BACKTEST_REQUIRED | Range/evidence candidate rules |
+| `regime.required_confirmations` | `int` | BACKTEST_REQUIRED | Positive consecutive candidate evaluations |
+| `regime.timeframe_weights` | `Mapping[Timeframe, Decimal]` | BACKTEST_REQUIRED | Chính xác keys `M15`, `H1`; không âm, tổng 1 |
+| `regime.trend_candidate_threshold` | `DecimalRatio` | BACKTEST_REQUIRED | Áp đối xứng UP/DOWN |
+| `regime.sideway_candidate_threshold` | `DecimalRatio` | BACKTEST_REQUIRED | Dương |
+| `regime.high_volatility_candidate_threshold` | `DecimalRatio` | BACKTEST_REQUIRED | Được evaluate trước các regime khác |
+| `regime.weights.trend` | `Mapping[str, Decimal]` | BACKTEST_REQUIRED | Keys: ema, slope, adx, structure, price_location; không âm, tổng 1 |
+| `regime.weights.sideway` | `Mapping[str, Decimal]` | BACKTEST_REQUIRED | Keys: range, ema_compression, slope_flatness, adx_weakness, bounded_structure; tổng 1 |
+| `regime.weights.high_volatility` | `Mapping[str, Decimal]` | BACKTEST_REQUIRED | Keys: atr_percentile, bb_width_percentile, true_range_shock; tổng 1 |
+| `regime.adx.trend_start`, `regime.adx.trend_full` | `Decimal` | BACKTEST_REQUIRED | `[0,100]`, start < full |
+| `regime.adx.sideway_full`, `regime.adx.sideway_zero` | `Decimal` | BACKTEST_REQUIRED | `[0,100]`, full < zero |
+| `regime.ema.minimum_slope_atr` | `Decimal` | BACKTEST_REQUIRED | Dương; symmetric direction |
+| `regime.ema.full_slope_atr` | `Decimal` | BACKTEST_REQUIRED | Lớn hơn minimum |
+| `regime.ema.maximum_sideway_slope_atr` | `Decimal` | BACKTEST_REQUIRED | Dương |
+| `regime.ema.maximum_sideway_dispersion_atr` | `Decimal` | BACKTEST_REQUIRED | Dương |
+| `regime.price_location_tolerance_atr` | `Decimal` | BACKTEST_REQUIRED | Không âm |
+| `regime.high_volatility.atr_percentile_start`, `regime.high_volatility.atr_percentile_full` | `Decimal` | BACKTEST_REQUIRED | `[0,100]`, start < full |
+| `regime.high_volatility.bb_percentile_start`, `regime.high_volatility.bb_percentile_full` | `Decimal` | BACKTEST_REQUIRED | `[0,100]`, start < full |
+| `regime.high_volatility.true_range_atr_start`, `regime.high_volatility.true_range_atr_full` | `Decimal` | BACKTEST_REQUIRED | Dương, start < full |
 
-### 4.4 `levels`
+### 4.6 `levels`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
 | `levels.lookback_bars` | mapping timeframe→int | BACKTEST_REQUIRED | Positive; đủ trước `as_of` |
-| `levels.swing_confirmation_bars` | `int` | BACKTEST_REQUIRED | Positive; point chỉ usable sau confirmation |
-| `levels.cluster_tolerance_atr` | `Decimal` | BACKTEST_REQUIRED | Dương |
+| `levels.swing_left_bars`, `levels.swing_right_bars` | `int` | BACKTEST_REQUIRED | Positive; point usable sau right bars |
+| `levels.minimum_touches` | `int` | BACKTEST_REQUIRED | `>= 2` |
+| `levels.full_strength_touches` | `int` | BACKTEST_REQUIRED | `>= minimum_touches`; strength đạt 1 tại count này |
+| `levels.level_merge_distance_atr` | `Decimal` | BACKTEST_REQUIRED | Dương; clustering distance |
+| `levels.zone_half_width_atr` | `Decimal` | BACKTEST_REQUIRED | Không âm; S/R tolerance |
 | `levels.minimum_level_strength` | `DecimalRatio` | BACKTEST_REQUIRED | Dưới mức này không đưa vào active set |
-| `levels.near_boundary_atr` | `Decimal` | BACKTEST_REQUIRED | Phân loại near support/resistance |
-| `levels.middle_zone_fraction` | `DecimalRatio` | BACKTEST_REQUIRED | Không overlap edge zones |
+| `levels.support_zone_max_fraction` | `DecimalRatio` | BACKTEST_REQUIRED | Upper bound của normalized support zone |
+| `levels.resistance_zone_min_fraction` | `DecimalRatio` | BACKTEST_REQUIRED | Lower bound resistance; lớn hơn support max |
+| `levels.outside_tolerance_fraction` | `DecimalRatio` | BACKTEST_REQUIRED | Tolerance quanh `[0,1]` trước breakout |
 | `levels.minimum_range_width_atr` | `Decimal` | BACKTEST_REQUIRED | Range phải đủ rộng sau costs |
+| `levels.maximum_range_stale_bars` | `int` | BACKTEST_REQUIRED | Positive; quá hạn → RANGE_STALE |
 | `levels.breakout_buffer_atr` | `Decimal` | BACKTEST_REQUIRED | Detect, không phải entry trigger |
-| `levels.confirmation_bars` | `int` | BACKTEST_REQUIRED | Positive |
+| `levels.breakout_confirmation_bars` | `int` | BACKTEST_REQUIRED | Positive subsequent closed 15m bars |
+| `levels.breakout_hold_tolerance_atr` | `Decimal` | BACKTEST_REQUIRED | Không âm; confirmation close guard |
+| `levels.retest_tolerance_atr` | `Decimal` | BACKTEST_REQUIRED | Không âm; boundary touch/hold zone |
 | `levels.retest_expiry_bars` | `int` | BACKTEST_REQUIRED | Positive; hết hạn → NO_TRADE |
 
-### 4.5 `risk`
+### 4.7 `risk`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
 | `risk.risk_per_trade` | `DecimalRatio` | BACKTEST_REQUIRED | `0 < value < 1` |
+| `risk.target_leverage` | `Decimal` | BACKTEST_REQUIRED | `>= 1` và `<= max_leverage`; chỉ margin planning |
 | `risk.max_leverage` | `Decimal` | BACKTEST_REQUIRED | `>= 1`; hard cap, không phải sizing input |
 | `risk.max_position_notional` | `Decimal` | BACKTEST_REQUIRED | USDT dương |
 | `risk.max_total_exposure` | `Decimal` | BACKTEST_REQUIRED | `>= max_position_notional` cho single symbol |
 | `risk.max_daily_loss` | `Decimal` | BACKTEST_REQUIRED | Positive absolute USDT; trigger khi daily realized net PnL `<= -limit` |
 | `risk.max_daily_drawdown` | `DecimalRatio` | BACKTEST_REQUIRED | Drawdown từ session peak equity; chạm limit → HALT |
-| `risk.max_daily_trades` | `int` | BACKTEST_REQUIRED | Positive; theo closed lifecycle |
+| `risk.max_daily_trades` | `int` | BACKTEST_REQUIRED | Positive; tăng một lần tại first non-zero fill mỗi lifecycle |
 | `risk.max_consecutive_losses` | `int` | BACKTEST_REQUIRED | Positive |
 | `risk.minimum_rr` | `Decimal` | BACKTEST_REQUIRED | Dương; net-of-estimated-costs |
 | `risk.max_allowed_spread` | `DecimalRatio` | BACKTEST_REQUIRED | Dương |
@@ -120,10 +194,13 @@ Notation: `DecimalRatio` là Decimal trong `[0,1]` trừ khi field ghi khác;
 | `risk.max_open_positions` | `int` | DEFAULT_FOR_DEVELOPMENT | Một cho MVP; positive |
 | `risk.stop.min_distance_atr` | `Decimal` | BACKTEST_REQUIRED | Dương |
 | `risk.stop.max_distance_atr` | `Decimal` | BACKTEST_REQUIRED | Lớn hơn min |
-| `risk.stop.atr_buffer` | `Decimal` | BACKTEST_REQUIRED | Không âm |
+| `risk.stop.minimum_tick_multiple` | `Decimal` | BACKTEST_REQUIRED | `>= 1` |
+| `risk.stop.minimum_spread_multiple` | `Decimal` | BACKTEST_REQUIRED | Dương |
+| `risk.margin_buffer_ratio` | `DecimalRatio` | BACKTEST_REQUIRED | Reserve margin, `< 1` |
+| `risk.funding_buffer_intervals` | `int` | BACKTEST_REQUIRED | Non-negative |
 | `risk.unrealized_drawdown_gate` | typed optional limit | BACKTEST_REQUIRED | Nếu unset phải ghi rõ disabled; không thay daily realized limit |
 
-### 4.6 `execution`
+### 4.8 `execution`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
@@ -133,65 +210,110 @@ Notation: `DecimalRatio` là Decimal trong `[0,1]` trừ khi field ghi khác;
 | `execution.approval_ttl` | `Duration` | BACKTEST_REQUIRED | Positive; hết hạn phải re-evaluate |
 | `execution.submit_timeout` | `Duration` | BACKTEST_REQUIRED | Positive; timeout → query-before-retry |
 | `execution.cancel_timeout` | `Duration` | BACKTEST_REQUIRED | Positive |
-| `execution.partial_fill_policy` | enum | BACKTEST_REQUIRED | `PROTECT_FILLED_AND_CANCEL_REMAINDER` là candidate policy, chưa chốt |
-| `execution.protection_failure_policy` | enum | BACKTEST_REQUIRED | Fail closed; phải có reduce/reconcile contract |
-| `execution.max_order_retries` | `int` | DEFAULT_FOR_DEVELOPMENT | Retry transport không đồng nghĩa submit lại; non-negative |
+| `execution.price_deviation_tolerance` | `DecimalRatio` | BACKTEST_REQUIRED | Revalidate reference vs current executable price |
+| `execution.partial_fill_policy` | `PartialFillPolicy` | DEFAULT_FOR_DEVELOPMENT | Phải `PROTECT_FILLED_AND_CANCEL_REMAINDER` |
+| `execution.max_query_retries` | `int` | BACKTEST_REQUIRED | Bounded query/reconcile retries; non-negative |
+| `execution.retry_delay` | `Duration` | BACKTEST_REQUIRED | Positive; chỉ idempotent query/transport retry |
+| `execution.retry_backoff_multiplier` | `Decimal` | BACKTEST_REQUIRED | `>= 1`; bounded by max retry delay |
+| `execution.max_retry_delay` | `Duration` | BACKTEST_REQUIRED | `>= retry_delay` |
 
-### 4.7 `data`
+`risk.max_slippage` là canonical slippage tolerance mà execution revalidation dùng;
+không tạo key execution khác cùng semantics.
+
+### 4.9 `protection`
+
+| Key | Type | Class | Validation/meaning |
+|---|---|---|---|
+| `protection.stop_order_type` | `OrderType` | DEFAULT_FOR_DEVELOPMENT | `STOP_MARKET`; reduce-only |
+| `protection.take_profit_order_type` | `OrderType` | DEFAULT_FOR_DEVELOPMENT | `TAKE_PROFIT_MARKET`; reduce-only |
+| `protection.ack_timeout` | `Duration` | BACKTEST_REQUIRED | Positive; timeout → query, không submit blind |
+| `protection.require_stop_before_managing` | `bool` | DEFAULT_FOR_DEVELOPMENT | Phải true |
+| `protection.stop_failure_policy` | `ProtectionFailurePolicy` | DEFAULT_FOR_DEVELOPMENT | `CANCEL_REMAINDER_REDUCE_AND_HALT` |
+| `protection.take_profit_failure_policy` | `TakeProfitFailurePolicy` | DEFAULT_FOR_DEVELOPMENT | `RECOVER_THEN_REDUCE_AND_HALT` |
+| `protection.max_recovery_attempts` | `int` | BACKTEST_REQUIRED | Non-negative, bounded |
+
+### 4.10 `data`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
 | `data.timeframes.micro` | `Timeframe` | DEFAULT_FOR_DEVELOPMENT | `5m` |
 | `data.timeframes.entry` | `Timeframe` | DEFAULT_FOR_DEVELOPMENT | `15m`; evaluation trigger |
 | `data.timeframes.context` | `Timeframe` | DEFAULT_FOR_DEVELOPMENT | `1h`; closed only |
-| `data.history_bars` | mapping timeframe→int | BACKTEST_REQUIRED | Phải >= derived warm-up requirement |
-| `data.freshness` | mapping stream→Duration | BACKTEST_REQUIRED | Quote/candle/account có SLA riêng |
-| `data.gap_policy` | enum | DEFAULT_FOR_DEVELOPMENT | `BLOCK_AND_BACKFILL`; không fill synthetic |
-| `data.max_backfill_attempts` | `int` | DEFAULT_FOR_DEVELOPMENT | Non-negative; vượt → unhealthy/halt policy |
+| `data.history_bars.5m`, `data.history_bars.15m`, `data.history_bars.1h` | `int` | BACKTEST_REQUIRED | Mỗi field >= derived warm-up requirement |
+| `data.warmup_candles.5m`, `data.warmup_candles.15m`, `data.warmup_candles.1h` | `int` | BACKTEST_REQUIRED | Derived/validated, explicit per timeframe |
+| `data.freshness.candle_5m`, `candle_15m`, `candle_1h` | `Duration` | BACKTEST_REQUIRED | Positive per stream |
+| `data.freshness.quote`, `account`, `position`, `instrument_metadata` | `Duration` | BACKTEST_REQUIRED | Positive per context |
+| `data.gap_policy` | `GapPolicy` | DEFAULT_FOR_DEVELOPMENT | `BLOCK_AND_BACKFILL`; không fill synthetic |
+| `data.ordering_window` | `Duration` | BACKTEST_REQUIRED | Non-negative receive delay buffer |
+| `data.max_backfill_attempts` | `int` | BACKTEST_REQUIRED | Non-negative; vượt → unhealthy/halt policy |
 | `data.clock_drift_tolerance` | `Duration` | BACKTEST_REQUIRED | Non-negative |
 | `data.store_raw` | `bool` | DEFAULT_FOR_DEVELOPMENT | True cho reproducibility; raw immutable |
 
-### 4.8 `journal`
+### 4.11 `journal`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
-| `journal.backend` | enum | DEFAULT_FOR_DEVELOPMENT | `SQLITE` cho MVP |
-| `journal.database_path` | path | DEFAULT_FOR_DEVELOPMENT | Không nằm trong Git; parent writable |
+| `journal.backend` | `JournalBackend` | DEFAULT_FOR_DEVELOPMENT | `SQLITE` cho MVP |
+| `journal.database_path` | path | DEFAULT_FOR_DEVELOPMENT | `var/trading_bot.db`; không nằm trong Git, parent writable |
 | `journal.append_only` | `bool` | DEFAULT_FOR_DEVELOPMENT | Phải true cho audit events |
 | `journal.require_write_before_submit` | `bool` | DEFAULT_FOR_DEVELOPMENT | Phải true |
-| `journal.busy_timeout` | `Duration` | DEFAULT_FOR_DEVELOPMENT | Positive |
-| `journal.retention_days` | optional int | DEFAULT_FOR_DEVELOPMENT | Null nghĩa giữ vô hạn; không xóa audit đang dùng |
+| `journal.busy_timeout` | `Duration` | BACKTEST_REQUIRED | Positive |
+| `journal.retention_days` | optional int | DEFAULT_FOR_DEVELOPMENT | Mặc định null nghĩa giữ vô hạn; không xóa audit đang dùng |
 
-### 4.9 `monitoring`
+### 4.12 `monitoring`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
-| `monitoring.health_interval` | `Duration` | DEFAULT_FOR_DEVELOPMENT | Positive |
+| `monitoring.health_interval` | `Duration` | BACKTEST_REQUIRED | Positive |
 | `monitoring.reconciliation_interval` | `Duration` | BACKTEST_REQUIRED | Positive; Demo validation cần kiểm chứng |
 | `monitoring.api_error_window` | `Duration` | BACKTEST_REQUIRED | Positive |
 | `monitoring.api_error_limit` | `int` | BACKTEST_REQUIRED | Positive |
-| `monitoring.alert_channels` | `tuple[str,...]` | DEFAULT_FOR_DEVELOPMENT | Có thể rỗng local; journal vẫn bắt buộc |
+| `monitoring.alert_channels` | `tuple[str,...]` | DEFAULT_FOR_DEVELOPMENT | Mặc định empty tuple local; journal vẫn bắt buộc |
 | `monitoring.kill_switch_requires_manual_reset` | `bool` | DEFAULT_FOR_DEVELOPMENT | Phải true |
 
 ## 5. Cross-field validation
 
-1. Timeframes phải đúng `5m/15m/1h`, khác nhau và chia hết theo hierarchy.
-2. `history_bars` phải đáp ứng max indicator/level warm-up cộng confirmation lag.
-3. Component weights/maxima phải tổng 100 cho mỗi phía.
-4. Range middle/edge zones không overlap; support luôn dưới resistance.
-5. Stop max distance lớn hơn min; risk caps dương và coherent.
-6. Demo yêu cầu environment `DEMO`, live switch false và credentials chỉ từ env.
-7. Nếu environment `LIVE`, application PHASE 3 phải reject vì live implementation
-   chưa tồn tại, kể cả khi một switch bị đặt true.
-8. `execution.enabled=false` không được override bằng CLI shortcut không audit.
-9. Mọi `BACKTEST_REQUIRED` field phải explicit; null/missing là startup error, không
-   tự lấy “best practice” làm default.
+1. Decimal precision ít nhất 28 và rounding mode đúng canonical enum; thay đổi arithmetic
+   context phải đổi strategy/config version.
+2. Timeframes phải đúng `5m/15m/1h`, khác nhau và chia hết theo hierarchy.
+3. `history_bars` phải đáp ứng max indicator/level warm-up cộng confirmation lag.
+4. `warmup_candles` mỗi timeframe `>=` công thức derived trong `market-data.md` và
+   `history_bars >= warmup_candles`.
+5. EMA periods đúng `[20,50,200]`; mọi indicator period/lookback dương; percentile
+   lookback lớn hơn base period theo field contract.
+6. Component maxima tổng 100; evidence weights mỗi component tổng 1 và có đúng
+   canonical keys; minimum confluence trong `[1,6]`.
+7. Mọi ramp có upper/full bound lớn hơn lower/start bound; regime family/timeframe
+   weights tổng 1; `minimum_evidence_count` nằm trong `[2,3]` vì family nhỏ nhất có ba
+   evidence atoms.
+8. Range zones thỏa `0 <= support_zone_max_fraction <
+   resistance_zone_min_fraction <= 1`; outside tolerance không âm;
+   `2 <= minimum_touches <= full_strength_touches`; stale, breakout-confirmation và
+   retest-expiry bar counts đều positive.
+9. `risk.target_leverage <= risk.max_leverage`; stop max distance lớn hơn min;
+   `strategy.stop.atr_buffer >= 0`; daily, position, exposure và margin caps dương;
+   `max_total_exposure >= max_position_notional`; `margin_buffer_ratio < 1`.
+10. Retry counts hữu hạn và không âm; `0 < retry_delay <= max_retry_delay`; backoff
+    multiplier `>= 1`. Protection policies phải đúng canonical fail-safe values;
+    không cho enum extension qua YAML.
+11. Demo yêu cầu environment `DEMO`, live switch false và credentials chỉ từ env.
+12. Nếu environment `LIVE`, application PHASE 3 phải reject vì live implementation
+    chưa tồn tại, kể cả khi một switch bị đặt true.
+13. `execution.enabled=false` không được override bằng CLI shortcut không audit.
+14. Mọi `BACKTEST_REQUIRED` field phải explicit; null/missing là startup error, không
+    tự lấy “best practice” làm default.
 
 ## 6. Secret policy
 
-Tên biến dự kiến: `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSPHRASE`. Không field nào
-được ghi trong YAML, config hash, exception, log hoặc journal. Demo credential không
-được có withdrawal permission. `.env` chỉ dành local và nằm trong `.gitignore`.
+| Configuration class | Storage | Examples | Logging/Git rule |
+|---|---|---|---|
+| Normal application config | Versioned YAML | symbol, periods, thresholds, limits, policies | Có thể commit; journal bằng config hash |
+| Secret config | Environment hoặc local `.env` | `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSPHRASE` | Không commit, hash, exception, log hoặc journal plaintext |
+
+Demo credential không được có withdrawal permission. `.env` chỉ dành local và nằm
+trong `.gitignore`. Logger/error serializer phải redact theo secret field names và
+không dump environment/raw authentication request. Thiếu secret ở phase cần adapter
+phải fail startup; PHASE 2 không tạo secret thật.
 
 ## 7. Reload và versioning
 

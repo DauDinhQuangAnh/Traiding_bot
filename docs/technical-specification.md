@@ -50,7 +50,7 @@ domain ─X→ OKX SDK / SQLite / network / system clock
 Canonical models, enums, nullability and validation nằm trong `domain-models.md`.
 Cross-cutting rules:
 
-- Price/quantity/money/PnL/fees/risk: Decimal only.
+- Price/quantity/money/PnL/fees/risk: Decimal only với configured precision/rounding.
 - UTC aware datetime only.
 - Closed candle only; all data bounded by `as_of`.
 - Immutable snapshots/events; state changes create new revision.
@@ -67,10 +67,10 @@ Operations có thể async ở adapters; domain return types/result semantics kh
 |---|---|---|
 | `SnapshotBuilder` | `build(trigger, config_version) -> Result[MarketSnapshot]` | Consistent point-in-time read; detects duplicate/gap/future data |
 | `IndicatorEngine` | `calculate(snapshot, config) -> IndicatorSnapshot` | No side effects; not-ready explicit |
-| `LevelEngine` | `assess(snapshot, indicators, prior_range_state, config) -> LevelSet` | Confirmed points only; event-sourced range state |
-| `RegimeDetector` | `detect(snapshot, indicators, structure, levels, config) -> RegimeAssessment` | Multi-evidence; uncertain on conflict |
-| `SignalScorer` | `score(context, config) -> SignalAssessment` | Scores both sides; no candidate/order |
-| `DecisionEngine` | `decide(context, assessment, config, fee_model) -> DecisionOutcome` | Always DecisionRecord; candidate optional |
+| `LevelEngine` | `assess(snapshot, indicators, prior_range_state: RangeContext?, config) -> LevelSet` | Confirmed points only; event-sourced range state |
+| `RegimeDetector` | `detect(snapshot, indicators, level_set, prior_assessment: RegimeAssessment?, config) -> RegimeAssessment` | Prior assessment is explicit persistence input; uses `level_set.market_structure`; uncertain on conflict |
+| `SignalScorer` | `score(snapshot, indicators, level_set, regime_assessment, config) -> SignalAssessment` | Scores both sides; no candidate/order |
+| `DecisionEngine` | `decide(snapshot, indicators, level_set, regime_assessment, signal_assessment, config, fee_model) -> DecisionOutcome` | Always DecisionRecord; candidate optional |
 | `RiskEngine` | `evaluate(candidate, risk_context, metadata, fee_model, config) -> RiskOutcome` | APPROVE/REJECT/HALT; only creator of approved plan |
 | `PositionManager` | `apply(report/event, prior_state) -> PositionTransition` | Validated revision; protection/reconciliation invariants |
 | `StateMachine` | `transition(current, event, context) -> Result[Transition]` | Invalid transitions rejected and journaled |
@@ -97,24 +97,25 @@ audit/debug và không được truyền vào domain logic.
 - `stream_events(symbols, timeframes) -> AsyncIterator[RawMarketEvent]`
 - `fetch_candles(symbol, timeframe, start, end, limit) -> Sequence[RawCandle]`
 - `fetch_latest_quote(symbol) -> Quote`
-- `health() -> HealthSnapshot`
+- `health() -> ComponentHealth`
 
 #### `AccountProvider`
 
 - `get_account_snapshot(account_id) -> AccountSnapshot`
 - `get_positions(symbol?) -> Sequence[ExternalPosition]`
 - `get_balance(currency) -> BalanceSnapshot`
-- `health() -> HealthSnapshot`
+- `health() -> ComponentHealth`
 
 Account data must carry event/receive time and reconciliation version.
 
 #### `ExchangeExecutionPort`
 
-- `submit_order(order_request, client_order_id) -> ExecutionReport`
+- `submit_order(order_request) -> ExecutionReport`
 - `cancel_order(client_order_id, exchange_order_id?) -> ExecutionReport`
 - `get_order(client_order_id, exchange_order_id?) -> ExecutionReport`
 - `get_open_orders(symbol) -> Sequence[ExecutionReport]`
 - `get_position(symbol) -> ExternalPosition`
+- `health() -> ComponentHealth`
 
 Only accepts request derived from unexpired `ApprovedTradePlan`. Timeout result is
 `UNKNOWN`, not proof of rejection. Adapter must support query by client ID before retry.
@@ -126,6 +127,7 @@ Only accepts request derived from unexpired `ApprovedTradePlan`. Timeout result 
 - `find_by_evaluation_id(evaluation_id) -> DecisionRecord?`
 - `find_by_client_order_id(client_order_id) -> OrderIntent?`
 - `transaction(operation) -> Result`
+- `health() -> ComponentHealth`
 
 Append is durable and idempotent by event ID. No update/delete audit API.
 
@@ -139,10 +141,12 @@ Business logic không gọi system time/sleep trực tiếp.
 #### `InstrumentMetadataProvider`
 
 - `get(symbol, as_of) -> InstrumentMetadata`
-- `health() -> HealthSnapshot`
+- `health() -> ComponentHealth`
 
 Metadata includes instrument type, contract/quote/base units, tick/lot/min/max,
 contract value, supported order/margin/leverage constraints, version/effective time.
+Risk-context assembler tổng hợp component health thành canonical `HealthSnapshot`; một
+adapter không được tự suy đoán status của component khác.
 
 #### `FeeModel`
 
@@ -200,7 +204,7 @@ last-mile market conditions. It may reject/expire, never enlarge or repair plan.
 - Risk session boundary là 00:00 UTC; reset counter không tự reset active kill switch.
 - Daily loss dùng realized `net_pnl` sau fees/funding. Trigger khi
   `daily_net_pnl <= -max_daily_loss`.
-- Daily drawdown là `(session_peak_equity - current_equity) / session_peak_equity`;
+- Daily drawdown là `(session_peak_equity - account_equity) / session_peak_equity`;
   peak chỉ tăng trong session và state được persist. Chạm configured cap → HALT.
 - Daily trade count tăng đúng một lần khi lifecycle nhận first non-zero entry fill;
   canceled/unfilled order không tính, partial fills cùng lifecycle không tăng thêm.
@@ -213,6 +217,8 @@ last-mile market conditions. It may reject/expire, never enlarge or repair plan.
 Invalid event/state pair returns `INVALID_STATE_TRANSITION`, leaves state unchanged,
 and appends `INVALID_TRANSITION`. Repeated/critical invalid transitions escalate by
 health policy; they never get silently ignored.
+
+### 9.1 Global bot state
 
 | Current State | Event | Guard | Next State | Side effect |
 |---|---|---|---|---|
@@ -231,8 +237,9 @@ health policy; they never get silently ignored.
 | `SUBMITTING` | `ORDER_REJECTED` | Authoritative rejected status | `OBSERVING` | Close intent, journal |
 | `SUBMITTING` | `SUBMIT_OUTCOME_UNKNOWN` | Timeout/no authoritative result | `RECOVERING` | Query by client ID; no blind retry |
 | `PENDING_ENTRY` | `ENTRY_CANCELED_UNFILLED` | Confirmed zero fill | `OBSERVING` | Close lifecycle without trade count per policy |
-| `PENDING_ENTRY` | `ENTRY_FILLED_PROTECTED` | Full/accepted fill and stop covers quantity | `MANAGING_POSITION` | Persist position/protection |
+| `PENDING_ENTRY` | `ENTRY_FILLED_PROTECTED` | Fill accepted; stop and TP cover filled quantity | `MANAGING_POSITION` | Persist position/protection |
 | `PENDING_ENTRY` | `PARTIAL_FILL_OR_PROTECTION_UNKNOWN` | Exposure/state unresolved | `RECOVERING` | Block entries, protect/reduce |
+| `PENDING_ENTRY` | `PROTECTION_FAILED` | Stop cannot be confirmed for filled quantity | `HALTED` | Cancel remainder, reduce-only close, kill switch |
 | `MANAGING_POSITION` | `EXIT_TRIGGERED` | Valid SL/TP/risk-reducing intent | `EXITING` | Persist reduce-only intent |
 | `MANAGING_POSITION` | `STATE_UNCERTAIN` | Disconnect/mismatch | `RECOVERING` | Block entry, reconcile |
 | `MANAGING_POSITION` | `PROTECTION_FAILED` | Open quantity unprotected | `HALTED` | Protect/reduce + kill switch |
@@ -248,6 +255,68 @@ health policy; they never get silently ignored.
 
 Any state may receive a critical health event and enter `HALTED`, except that
 transition implementation must be idempotent when already halted.
+
+### 9.2 Trade lifecycle state
+
+NO_TRADE không tạo TradeLifecycle. Directional candidate tạo lifecycle có
+`trade_id = candidate_id`; global `BotState` và `TradeLifecycleState` là hai enum riêng.
+
+| Current lifecycle state | Event | Guard | Next lifecycle state | Persisted effect |
+|---|---|---|---|---|
+| `CANDIDATE_CREATED` | `RISK_REVIEW_STARTED` | Candidate valid | `RISK_REVIEW` | Candidate + lifecycle revision |
+| `RISK_REVIEW` | `RISK_REJECTED` | RiskDecision REJECT | `REJECTED` | Risk decision/reasons; terminal |
+| `RISK_REVIEW` | `RISK_APPROVED` | Approval/plan valid | `APPROVED` | Risk decision + immutable plan |
+| `RISK_REVIEW` | `RISK_HALT` | RiskDecision HALT | `HALTED` | Kill switch event |
+| `APPROVED` | `ORDER_INTENT_PERSISTED` | Unique entry client ID, plan unexpired | `SUBMITTING` | Write-ahead intent before I/O |
+| `SUBMITTING` | `ORDER_ACKNOWLEDGED` | IDs match | `PENDING_ENTRY` | Execution report |
+| `SUBMITTING` | `ORDER_REJECTED` | Authoritative reject, zero fill | `REJECTED` | Terminal report/reason |
+| `SUBMITTING` | `SUBMIT_OUTCOME_UNKNOWN` | Timeout/no authoritative state | `RECOVERY` | Preserve client ID; query only |
+| `PENDING_ENTRY` | `ENTRY_CANCELED_UNFILLED` | Confirmed zero cumulative fill | `REJECTED` | Cancel report; no trade count |
+| `PENDING_ENTRY` | `ENTRY_FILLED_PROTECTED` | Filled quantity, stop and TP confirmed | `OPEN` | Position/protection snapshot |
+| `PENDING_ENTRY` | `PARTIAL_FILL` | Cumulative fill between zero/requested | `RECOVERY` | Cancel remainder, protect fill |
+| `PENDING_ENTRY` | `TAKE_PROFIT_FAILED` | Stop confirmed nhưng TP chưa confirmed | `RECOVERY` | Keep stop; recover TP or reduce |
+| `OPEN` | `EXIT_TRIGGERED` | Reduce-only intent valid | `CLOSING` | Write-ahead exit intent |
+| `OPEN` | `STATE_UNCERTAIN` | Disconnect/mismatch | `RECOVERY` | Reconciliation event |
+| `OPEN` | `PROTECTION_FAILED` | Stop absent/invalid | `HALTED` | Reduce-only close + kill switch |
+| `CLOSING` | `POSITION_CLOSED` | Authoritative flat and reports reconciled | `CLOSED` | Final PnL/counters |
+| `CLOSING` | `EXIT_OUTCOME_UNKNOWN` | Timeout/mismatch | `RECOVERY` | Query/reconcile |
+| `RECOVERY` | `RECONCILED_NO_FILL` | No order and zero position | `REJECTED` | Resolve intent terminally |
+| `RECOVERY` | `RECONCILED_PENDING_ORDER` | Authoritative pending entry | `PENDING_ENTRY` | Restore order state |
+| `RECOVERY` | `RECONCILED_PROTECTED_POSITION` | Filled position, stop and TP confirmed | `OPEN` | Restore position state |
+| `RECOVERY` | `RECONCILED_CLOSED` | Authoritative flat after prior fill/exit | `CLOSED` | Finalize reports/PnL |
+| `RECOVERY` | `RECOVERY_FAILED` | Attempts exhausted/state unsafe | `HALTED` | Reduce if possible + kill switch |
+| `HALTED` | `POSITION_CLOSED` | Risk-reducing close confirmed flat | `CLOSED` | Finalize PnL; global bot remains HALTED |
+
+Execution adapter chỉ phát facts (`ExecutionReport`); application StateMachine là nơi
+duy nhất áp transition. Mọi revision persist state, triggering event ID, reason codes,
+order/position references và VersionSet để restart replay không phải suy đoán.
+
+### 9.3 Failure and recovery protocol
+
+1. **Submit timeout/unknown result:** persist `ORDER_TIMEOUT` và
+   `ORDER_OUTCOME_UNKNOWN`, chuyển global/lifecycle sang recovery, query cùng
+   `client_order_id`. Không tạo client ID hoặc submit mới. Bounded query hết mà chưa
+   có authoritative state → `RECOVERY_EXHAUSTED`, HALT.
+2. **Partial entry fill:** chặn entry mới, cancel unfilled remainder và xác nhận cancel;
+   lấy exact cumulative fill, đặt STOP reduce-only trước rồi TAKE_PROFIT cho đúng filled
+   quantity bằng deterministic purpose IDs. Cả hai confirmed → OPEN; outcome chưa rõ
+   vẫn RECOVERY.
+3. **Stop placement failure:** cancel remainder, phát reduce-only MARKET close cho
+   filled quantity bằng deterministic emergency EXIT ID, kích hoạt HALT. Close timeout
+   tiếp tục query trong HALTED/RECOVERY; không coi position đã flat khi chưa xác nhận.
+4. **Take-profit placement failure:** chỉ áp dụng khi stop đã confirmed. Giữ stop,
+   cancel entry remainder, RECOVERY và query/retry cùng TP client ID theo bounded policy.
+   Hết attempts → reduce-only close và HALT với `RECOVERY_EXHAUSTED`.
+5. **Journal failure trước submit:** không gọi execution port; HALT. Sau fill: block
+   entry, bảo vệ/reduce exposure trước, ghi emergency local diagnostic không chứa secret,
+   và HALT; audit chính phải reconcile bổ sung khi repository phục hồi.
+6. **State mismatch/restart:** exchange/account provider là authoritative cho current
+   order/position; local append-only events vẫn là audit truth. Chặn entry, query open
+   orders/position, rebuild revisions; mismatch không resolve trong bounded policy → HALT.
+7. **Invalid config:** fail tại STARTING, không tạo provider/execution side effect.
+
+Recovery retry chỉ áp dụng idempotent query/cancel hoặc cùng logical client ID theo port
+contract. Delay/backoff/attempt limits lấy từ typed config, không hard-code.
 
 ## 10. Persistence
 
@@ -278,21 +347,28 @@ adapters may encode/truncate to venue constraints but must persist reversible ma
 
 | ID | Deterministic input |
 |---|---|
-| `evaluation_id` | symbol + 15m close time + strategy version + config version |
+| `evaluation_id` (`decisionId`) | symbol + 15m close time + strategy version + config version |
 | `candidate_id` | evaluation ID + side + setup type + entry/stop/targets + assessment ID |
-| `risk_approval_id` | candidate ID + risk-context/state/config/instrument versions + evaluation nonce/time |
-| `client_order_id` | approved plan ID + logical purpose (`ENTRY`, `STOP`, `TP`, `EXIT`) + sequence |
-| `trade_id` | approved plan ID + entry-purpose client order ID |
+| `trade_id` | Candidate ID; stable từ lúc lifecycle được tạo |
+| `risk_decision_id` | Candidate ID + risk-context ID + state/config/instrument versions |
+| `risk_approval_id` | Risk decision ID + canonical `APPROVE` marker; chỉ có khi approved |
+| `approved_plan_id` | Risk approval ID + canonical quantized plan payload + instrument version |
+| `client_order_id` | Approved plan ID + `OrderPurpose` (`ENTRY`, `STOP`, `TAKE_PROFIT`, `EXIT`) + sequence |
 | `event_id` | producer + aggregate ID + event type + producer sequence/payload hash |
 
 Rules:
 
-1. Unique DB constraint enforces one evaluation per evaluation tuple.
-2. One risk approval can create at most one logical ENTRY client ID.
-3. Transport retry reuses same client ID; it never creates a new logical order.
-4. Submit timeout transitions to RECOVERING and queries exchange by client ID.
-5. Duplicate execution reports are discarded by event/report ID after audit metric.
-6. Process restart loads unresolved intents and reconciles before new evaluation.
+1. Unique DB constraint enforces one evaluation per evaluation tuple and one lifecycle
+   per candidate/trade ID.
+2. A candidate may receive at most one APPROVE result. If its plan expires before
+   write-ahead intent, that lifecycle becomes terminal; a fresh candle evaluation must
+   create a new candidate instead of re-approving the old one.
+3. Unique `(trade_id, OrderPurpose, sequence)` enforces one logical purpose order; one
+   risk approval can therefore create at most one logical ENTRY client ID.
+4. Transport retry reuses the same client ID; it never creates a new logical order.
+5. Submit timeout transitions to RECOVERING and queries exchange by client ID.
+6. Duplicate execution reports are discarded by event/report ID after audit metric.
+7. Process restart loads unresolved intents and reconciles before new evaluation.
 
 ### 11.1 Correlated journal records
 
@@ -301,7 +377,7 @@ Every 15m evaluation stores LONG/SHORT/NO_TRADE. Minimum DecisionRecord fields f
 range location, both scores/components, decision/reason codes and all four versions.
 
 Directional lifecycle additionally stores entry/stop/targets, quantity/leverage,
-risk budget/worst loss/RR, reports/fills, gross PnL, fee breakdown, funding, net PnL
+risk budget/worst loss/RR, reports/fills, gross PnL, fee breakdown, funding cash flow, net PnL
 and exit reason. Free text only explains structured data.
 
 Example semantics:
@@ -357,22 +433,20 @@ tại thời điểm này”, run không đạt acceptance.
 - Backtest validation later: chronological split, walk-forward, holdout, costs/stress,
   regime-segmented metrics and no leakage.
 
-## 15. Open questions
+## 15. Calibration and adapter inputs still required
 
-Không được hard-code trước khi review/chứng minh:
+Các mục sau là typed inputs/empirical values, không phải business logic để PHASE 3 tự
+sáng tạo. Missing value phải fail startup theo `BACKTEST_REQUIRED` hoặc metadata
+contract:
 
-1. OKX position mode, margin mode và exact instrument/contract metadata semantics.
-2. Indicator initialization/periods ngoài fixed EMA names và warm-up stabilization.
-3. Regime evidence transforms, weights, conflict/persistence thresholds.
-4. S/R/range lookbacks, zones, validation/tests và breakout/retest windows.
-5. Signal component weights, directional thresholds và minimum difference.
-6. Entry/target order model và whether maker assumption is defensible.
-7. Risk/trade, leverage/notional/exposure/daily/consecutive limits và cooldown.
-8. Stop ATR bounds/buffer, minimum net RR và liquidation safety buffer.
-9. Fee history availability, funding attribution, spread/slippage/latency models.
-10. Partial-fill and protection-failure emergency policy.
-11. Unrealized/session drawdown threshold calibration và emergency reduction policy.
-12. Backtest historical data source/quality/depth and final holdout period.
+1. Chọn position/margin mode và cung cấp exact instrument metadata từ adapter fixture.
+2. Điền periods/lookbacks, thresholds, weights, caps và cooldown trong versioned config,
+   sau đó calibration bằng backtest; formulas và precedence đã cố định trong spec.
+3. Cung cấp historical fee/funding/spread/slippage data hoặc conservative versioned
+   scenario theo FeeModel contract.
+4. Chọn historical dataset/source/depth và final holdout period, ghi bằng data version.
+5. Quyết định có bật optional unrealized drawdown gate hay để explicit disabled; daily
+   realized loss và session drawdown gates vẫn bắt buộc.
 
 ## 16. PHASE 2 acceptance criteria
 
@@ -396,6 +470,6 @@ Không được hard-code trước khi review/chứng minh:
 | Testing strategy covers safety-critical contracts | PASS | This document §14 |
 | No API integration, orders, secrets, optimization or live enablement added | PASS | Repository scope review |
 
-**PHASE 2: SPECIFICATION COMPLETE — AWAITING USER REVIEW.**
+**PHASE 2: APPROVED — xem `phase-2-review.md`.**
 
 Không tự động bắt đầu PHASE 3.

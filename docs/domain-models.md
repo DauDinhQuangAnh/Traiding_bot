@@ -22,6 +22,8 @@
 | `TradeSide` | `LONG`, `SHORT` |
 | `RiskAction` | `APPROVE`, `REJECT`, `HALT` |
 | `BotState` | `STARTING`, `SYNCING`, `OBSERVING`, `EVALUATING`, `SUBMITTING`, `PENDING_ENTRY`, `MANAGING_POSITION`, `EXITING`, `COOLDOWN`, `RECOVERING`, `HALTED` |
+| `TradeLifecycleState` | `CANDIDATE_CREATED`, `RISK_REVIEW`, `REJECTED`, `APPROVED`, `SUBMITTING`, `PENDING_ENTRY`, `OPEN`, `CLOSING`, `CLOSED`, `RECOVERY`, `HALTED` |
+| `TradeLifecycleEvent` | `RISK_REVIEW_STARTED`, `RISK_REJECTED`, `RISK_APPROVED`, `RISK_HALT`, `ORDER_INTENT_PERSISTED`, `ORDER_ACKNOWLEDGED`, `ORDER_REJECTED`, `SUBMIT_OUTCOME_UNKNOWN`, `ENTRY_CANCELED_UNFILLED`, `ENTRY_FILLED_PROTECTED`, `PARTIAL_FILL`, `TAKE_PROFIT_FAILED`, `EXIT_TRIGGERED`, `STATE_UNCERTAIN`, `PROTECTION_FAILED`, `POSITION_CLOSED`, `EXIT_OUTCOME_UNKNOWN`, `RECONCILED_NO_FILL`, `RECONCILED_PENDING_ORDER`, `RECONCILED_PROTECTED_POSITION`, `RECONCILED_CLOSED`, `RECOVERY_FAILED` |
 | `BotEvent` | `CONFIG_VALIDATED`, `STARTUP_VALIDATION_FAILED`, `SYNC_COMPLETED`, `SYNC_FAILED`, `CANDLE_CLOSED`, `LOSS_COOLDOWN_STARTED`, `HEALTH_CRITICAL`, `NO_TRADE`, `RISK_REJECTED`, `RISK_APPROVED`, `RISK_HALT`, `ORDER_ACKNOWLEDGED`, `ORDER_REJECTED`, `SUBMIT_OUTCOME_UNKNOWN`, `ENTRY_CANCELED_UNFILLED`, `ENTRY_FILLED_PROTECTED`, `PARTIAL_FILL_OR_PROTECTION_UNKNOWN`, `EXIT_TRIGGERED`, `STATE_UNCERTAIN`, `PROTECTION_FAILED`, `POSITION_CLOSED`, `EXIT_OUTCOME_UNKNOWN`, `RECONCILED_FLAT`, `RECONCILED_PROTECTED_POSITION`, `RECOVERY_FAILED`, `COOLDOWN_EXPIRED`, `RISK_REDUCING_ACTION`, `OPERATOR_RESET_REQUESTED` |
 | `RangeLocation` | `NEAR_SUPPORT`, `MIDDLE`, `NEAR_RESISTANCE`, `OUTSIDE_RANGE` |
 | `BreakoutState` | `NONE`, `BREAKOUT_DETECTED`, `WAIT_CONFIRMATION`, `WAIT_RETEST`, `RETEST_VALIDATED`, `INVALIDATED`, `EXPIRED` |
@@ -39,24 +41,53 @@
 | `OrderPurpose` | `ENTRY`, `STOP`, `TAKE_PROFIT`, `EXIT` |
 | `OrderType` | `MARKET`, `LIMIT`, `STOP_MARKET`, `TAKE_PROFIT_MARKET` |
 | `OrderDirection` | `BUY`, `SELL` |
+| `SetupType` | `TREND_PULLBACK`, `SIDEWAY_MEAN_REVERSION`, `BREAKOUT_RETEST` |
+| `EntryModel` | `CLOSE_REFERENCE` |
+| `TargetModel` | `NEXT_OPPOSING_LEVEL` |
+| `PositionMode` | `NET`, `LONG_SHORT` |
+| `MarginMode` | `ISOLATED`, `CROSS` |
+| `GapPolicy` | `BLOCK_AND_BACKFILL` |
+| `PartialFillPolicy` | `PROTECT_FILLED_AND_CANCEL_REMAINDER` |
+| `ProtectionFailurePolicy` | `CANCEL_REMAINDER_REDUCE_AND_HALT` |
+| `TakeProfitFailurePolicy` | `RECOVER_THEN_REDUCE_AND_HALT` |
+| `JournalBackend` | `SQLITE` |
+| `SmoothingMethod` | `WILDER` |
+| `VolumeStatistic` | `MEAN` |
+| `DecimalRoundingMode` | `ROUND_HALF_EVEN` |
 | `ExecutionEnvironment` | `BACKTEST`, `DEMO`, `LIVE` |
 | `JournalEventType` | `DECISION_EVALUATED`, `RISK_EVALUATED`, `ORDER_INTENT_CREATED`, `ORDER_SUBMITTED`, `ORDER_ACKNOWLEDGED`, `FILL_RECEIVED`, `PROTECTION_CONFIRMED`, `POSITION_UPDATED`, `EXIT_COMPLETED`, `RECONCILIATION`, `DATA_CORRECTION`, `KILL_SWITCH_TRIGGERED`, `INVALID_TRANSITION` |
 
 `ReasonCode` là enum theo canonical registry tại `error-and-reason-codes.md`.
 `LIVE` tồn tại để configuration fail closed; PHASE 2 không implement live execution.
 
+### 2.1 `TradeSide` khác `OrderDirection`
+
+`TradeSide` mô tả exposure; `OrderDirection` mô tả thao tác mua/bán. Mapping canonical:
+
+| Order purpose | LONG trade | SHORT trade |
+|---|---|---|
+| `ENTRY` | `BUY`, `reduce_only=false` | `SELL`, `reduce_only=false` |
+| `STOP`, `TAKE_PROFIT`, `EXIT` | `SELL`, `reduce_only=true` | `BUY`, `reduce_only=true` |
+
+OrderDirection không được suy diễn thành TradeSide nếu thiếu purpose/current position.
+
 ## 3. Auxiliary value objects
 
 | Type | Fields | Validation |
 |---|---|---|
 | `VersionSet` | `code_version: str`, `strategy_version: str`, `config_version: str`, `data_version: str` | Tất cả bắt buộc, không rỗng |
-| `Quote` | `bid: Decimal`, `ask: Decimal`, `event_time: datetime`, `receive_time: datetime` | `0 < bid <= ask`; UTC |
-| `IndicatorValues` | `ema20`, `ema50`, `ema200`, `rsi`, `atr`, `adx`, `bb_upper`, `bb_middle`, `bb_lower`, `volume_mean`, `volume_ratio`: `Decimal` | Không NaN/infinite; ATR không âm; bands có thứ tự; RSI trong `[0,100]` |
-| `StructurePoint` | `kind`, `price: Decimal`, `time: datetime`, `candle_id: str`, `confirmed_at: datetime` | Chỉ dùng candle đã đóng; `confirmed_at >= time` |
-| `MarketStructure` | `trend`, `points: tuple[StructurePoint,...]`, `as_of`, `reason_codes` | Point không sau `as_of`; immutable |
+| `Quote` | `symbol: str`, `source: str`, `bid: Decimal`, `ask: Decimal`, `event_time: datetime`, `receive_time: datetime` | `0 < bid <= ask`; UTC; non-empty identity |
+| `IndicatorValues` | `ema20`, `ema50`, `ema200`, `ema20_slope_atr`, `ema50_slope_atr`, `ema200_slope_atr`, `rsi`, `rsi_slope`, `atr`, `atr_fraction`, `atr_percentile`, `adx`, `bb_upper`, `bb_middle`, `bb_lower`, `bb_width_fraction`, `bb_width_percentile`, `volume_mean`, `volume_ratio`: `Decimal` | Không NaN/infinite; ATR không âm; percentile/RSI/ADX trong `[0,100]`; bands có thứ tự |
+| `StructurePoint` | `kind: StructurePointKind`, `price: Decimal`, `time: datetime`, `candle_id: str`, `confirmed_at: datetime` | Chỉ dùng candle đã đóng; `confirmed_at >= time`; UTC |
+| `MarketStructure` | `trend: StructureTrend`, `points: tuple[StructurePoint,...]`, `as_of: datetime`, `reason_codes: tuple[ReasonCode,...]` | Point không sau `as_of`; UTC; immutable |
+| `RegimeEvidence` | `name: str`, `supports: MarketRegime`, `strength: Decimal`, `observed_value: Decimal`, `unit: str`, `rule_version: str`, `source_ids: tuple[str,...]` | Strength `[0,1]`; stable registered name; immutable |
+| `SignalEvidence` | `name: str`, `long_strength: Decimal`, `short_strength: Decimal`, `observed_value: Decimal`, `unit: str`, `source_ids: tuple[str,...]` | Strength `[0,1]`; stable registered name; immutable |
+| `GateResult` | `gate_name: str`, `passed: bool`, `reason_code: ReasonCode?`, `observed_value: Decimal?`, `limit_value: Decimal?`, `unit: str?` | Failed gate phải có reason; stable registered name |
 | `Target` | `label: str`, `price: Decimal`, `quantity_fraction: Decimal` | Giá dương; fraction `(0,1]`; parent plan kiểm tra tổng fractions bằng 1 |
-| `HealthSnapshot` | health từng subsystem, `observed_at`, `reason_codes` | Không có `UNKNOWN/UNHEALTHY` khi Risk approve |
-| `FeeBreakdown` | `entry_fee`, `exit_fee`, `funding`, `spread_cost`, `slippage_cost`: `Decimal` | Mỗi cost không âm; immutable |
+| `ComponentHealth` | `component: str`, `status: HealthStatus`, `observed_at: datetime`, `reason_codes: tuple[ReasonCode,...]` | Một provider/repository chỉ báo health của chính nó; UTC; immutable |
+| `HealthSnapshot` | `data_status`, `api_status`, `journal_status`, `account_status: HealthStatus`; `observed_at: datetime`; `reason_codes: tuple[ReasonCode,...]` | UTC; Risk chỉ approve khi cả bốn status là `HEALTHY` |
+| `CostRateEstimate` | `entry_fee_rate`, `stop_exit_fee_rate`, `target_exit_fee_rate`, `entry_slippage_rate`, `stop_slippage_rate`, `target_slippage_rate`, `funding_debit_rate: Decimal`; `model_version: str` | Mọi rate không âm; slippage/spread không double count; immutable |
+| `FeeBreakdown` | `entry_fee`, `exit_fee`, `spread_cost`, `slippage_cost`: `Decimal`; `funding_cash_flow: Decimal` | Costs không âm; funding signed: dương là credit, âm là debit; immutable |
 
 ## 4. Model contracts
 
@@ -134,14 +165,20 @@ Source: `regime`. Consumers: strategy, risk, journal, analytics.
 |---|---|---|
 | `assessment_id`, `indicator_snapshot_id`, `symbol` | `str` | No |
 | `regime` | `MarketRegime` | No |
+| `candidate_regime`, `previous_confirmed_regime` | `MarketRegime` | Yes |
+| `candidate_scores` | `Mapping[MarketRegime, Decimal]` | No |
 | `confidence` | `Decimal` | No |
-| `evidence` | `tuple[str, ...]` | No |
+| `evidence` | `tuple[RegimeEvidence, ...]` | No |
+| `confirmation_count` | `int` | No |
 | `reason_codes` | `tuple[ReasonCode, ...]` | No |
 | `as_of` | `datetime` | No |
 | `config_version`, `strategy_version` | `str` | No |
 
-Validation: confidence `[0,1]`; evidence không rỗng cho regime xác định; evidence
-mâu thuẫn/không đủ phải cho `UNCERTAIN`; không có direction side effect.
+Validation: confidence và candidate scores `[0,1]`; score map có chính xác các keys
+`TREND_UP`, `TREND_DOWN`, `SIDEWAY`, `HIGH_VOLATILITY` (`UNCERTAIN` chỉ là outcome);
+confirmation count không âm;
+evidence không rỗng cho regime xác định; evidence mâu thuẫn/không đủ phải cho
+`UNCERTAIN`; không có direction side effect.
 
 ### 4.5 `RangeContext`
 
@@ -153,18 +190,22 @@ Source: `levels`. Consumers: regime, strategy, journal.
 | Field | Type | Nullable |
 |---|---|---|
 | `range_id`, `symbol` | `str` | No |
-| `support`, `resistance`, `range_width`, `range_width_atr` | `Decimal` | No |
-| `range_started_at`, `as_of` | `datetime` | No |
-| `range_age_bars`, `support_tests`, `resistance_tests` | `int` | No |
+| `support_level_id`, `resistance_level_id` | `str` | No |
+| `support`, `resistance`, `range_width`, `range_mid`, `range_width_atr` | `Decimal` | No |
+| `position_in_range` | `Decimal` | No |
+| `range_started_at`, `last_validated_at`, `as_of` | `datetime` | No |
+| `range_age_bars`, `support_tests`, `resistance_tests`, `breakout_confirmation_count` | `int` | No |
 | `current_location` | `RangeLocation` | No |
 | `breakout_state` | `BreakoutState` | No |
 | `breakout_direction` | `BreakoutDirection` | Yes |
-| `breakout_detected_at`, `expires_at` | `datetime` | Yes |
+| `breakout_detected_at`, `state_updated_at`, `expires_at` | `datetime` | Yes |
 | `reason_codes` | `tuple[ReasonCode, ...]` | No |
 | `config_version`, `data_version` | `str` | No |
 
-Validation: `0 < support < resistance`; width bằng resistance trừ support;
-counts không âm; direction/time bắt buộc khi breakout state khác `NONE`;
+Validation: `0 < support < resistance`; `range_width = resistance - support`;
+`range_mid = (support + resistance) / 2`; `position_in_range =
+(reference_close - support) / range_width`; counts không âm; range không stale theo
+config; direction/time bắt buộc khi breakout state khác `NONE`;
 `SIDEWAY + MIDDLE` không được sinh candidate; `RETEST_VALIDATED` phải có chuỗi
 event detect → confirmation → retest hợp lệ.
 
@@ -180,7 +221,7 @@ Source: `levels`. Consumers: `LevelSet`, strategy, stop/target planner.
 | `kind` | `LevelKind` | No |
 | `price`, `zone_lower`, `zone_upper`, `strength` | `Decimal` | No |
 | `method` | `LevelMethod` | No |
-| `first_observed_at`, `confirmed_at`, `as_of` | `datetime` | No |
+| `first_observed_at`, `confirmed_at`, `last_tested_at`, `as_of` | `datetime` | No |
 | `test_count` | `int` | No |
 | `source_candle_ids` | `tuple[str, ...]` | No |
 | `invalidated_at` | `datetime` | Yes |
@@ -216,7 +257,7 @@ Source: `strategy.scoring`. Consumers: assessment, journal, analytics.
 |---|---|---|
 | `component_name` | `str` | No |
 | `long_points`, `short_points`, `max_points` | `Decimal` | No |
-| `evidence` | `tuple[str, ...]` | No |
+| `evidence` | `tuple[SignalEvidence, ...]` | No |
 | `reason_codes` | `tuple[ReasonCode, ...]` | No |
 | `config_version` | `str` | No |
 
@@ -234,7 +275,7 @@ Source: `strategy.scoring`. Consumers: decision engine, journal.
 | `signal_assessment_id`, `evaluation_id` | `str` | No |
 | `long_score`, `short_score` | `Decimal` | No |
 | `components` | `tuple[SignalComponent, ...]` | No |
-| `passed_gates`, `failed_gates` | `tuple[str, ...]` | No |
+| `gates` | `tuple[GateResult, ...]` | No |
 | `reason_codes` | `tuple[ReasonCode, ...]` | No |
 | `as_of` | `datetime` | No |
 | `versions` | `VersionSet` | No |
@@ -255,9 +296,14 @@ Source: `strategy.decision`. Consumers: risk, journal.
 | `entry_price`, `stop_price` | `Decimal` | No |
 | `targets` | `tuple[Target, ...]` | No |
 | `planned_rr_before_costs`, `planned_rr_after_costs` | `Decimal` | No |
-| `setup_type` | `str` | No |
+| `cost_rate_estimate` | `CostRateEstimate` | No |
+| `setup_type` | `SetupType` | No |
+| `entry_model` | `EntryModel` | No |
+| `target_model` | `TargetModel` | No |
 | `signal_assessment_id`, `regime_assessment_id` | `str` | No |
 | `range_id` | `str` | Yes |
+| `invalidation_level_id` | `str` | No |
+| `target_level_ids` | `tuple[str, ...]` | No |
 | `reason_codes` | `tuple[ReasonCode, ...]` | No |
 | `created_at` | `datetime` | No |
 | `versions` | `VersionSet` | No |
@@ -275,9 +321,9 @@ Source: risk context assembler. Consumers: risk engine, journal.
 | Field | Type | Nullable |
 |---|---|---|
 | `risk_context_id`, `symbol`, `account_id` | `str` | No |
-| `eligible_equity`, `available_margin`, `current_notional`, `daily_net_pnl` | `Decimal` | No |
+| `account_equity`, `eligible_equity`, `available_margin`, `current_notional`, `daily_net_pnl` | `Decimal` | No |
 | `session_peak_equity`, `daily_drawdown_ratio` | `Decimal` | No |
-| `daily_trade_count`, `consecutive_losses` | `int` | No |
+| `daily_trade_count`, `consecutive_losses`, `open_position_count` | `int` | No |
 | `cooldown_until` | `datetime` | Yes |
 | `quote` | `Quote` | No |
 | `position_state` | `PositionState` | No |
@@ -341,15 +387,20 @@ Source: execution adapter/simulator. Consumers: positions, journal, reconciliati
 | `execution_report_id`, `client_order_id`, `approved_plan_id`, `symbol` | `str` | No |
 | `exchange_order_id` | `str` | Yes |
 | `status` | `OrderStatus` | No |
+| `purpose` | `OrderPurpose` | No |
+| `direction` | `OrderDirection` | No |
+| `order_type` | `OrderType` | No |
+| `reduce_only` | `bool` | No |
 | `requested_quantity`, `cumulative_filled_quantity` | `Decimal` | No |
 | `last_fill_quantity`, `last_fill_price`, `average_fill_price` | `Decimal` | Yes |
 | `liquidity_role` | `LiquidityRole` | No |
-| `fees`, `funding`, `realized_slippage` | `Decimal` | No |
+| `fees`, `funding_cash_flow`, `realized_slippage` | `Decimal` | No |
 | `event_time`, `receive_time` | `datetime` | No |
 | `reason_codes` | `tuple[ReasonCode, ...]` | No |
 
-Validation: fill quantities không âm và cumulative không vượt requested ngoài explicit
-exchange anomaly; fill fields bắt buộc khi có fill; event id/order id dùng dedupe.
+Validation: fill quantities/fees/slippage không âm và cumulative không vượt requested
+ngoài explicit exchange anomaly; funding cash flow signed; fill fields bắt buộc khi
+có fill; direction phải map đúng purpose/TradeSide; event id/order id dùng dedupe.
 
 ### 4.15 `PositionState`
 
@@ -406,9 +457,10 @@ Source: application/positions. Consumers: risk counters, journal, analytics, rec
 
 | Field | Type | Nullable |
 |---|---|---|
-| `trade_id`, `evaluation_id`, `candidate_id`, `approved_plan_id`, `symbol` | `str` | No |
+| `trade_id`, `evaluation_id`, `candidate_id`, `symbol` | `str` | No |
+| `risk_decision_id`, `risk_approval_id`, `approved_plan_id` | `str` | Yes |
 | `side` | `TradeSide` | No |
-| `state` | `BotState` | No |
+| `state` | `TradeLifecycleState` | No |
 | `position_id` | `str` | Yes |
 | `client_order_ids`, `execution_report_ids` | `tuple[str, ...]` | No |
 | `opened_at`, `closed_at` | `datetime` | Yes |
@@ -418,8 +470,11 @@ Source: application/positions. Consumers: risk counters, journal, analytics, rec
 | `revision` | `int` | No |
 | `versions` | `VersionSet` | No |
 
-Validation: IDs không đổi suốt lifecycle; revision tăng đơn điệu; net PnL chỉ có khi
-closed và bằng gross trừ mọi costs; transition chỉ theo state-machine contract.
+Validation: IDs đã có không đổi suốt lifecycle; approval/plan chỉ có sau event APPROVED;
+REJECTED trực tiếp từ risk review không có approval/plan, còn execution reject sau
+approval phải giữ chúng để audit; revision tăng đơn điệu; net PnL chỉ có khi CLOSED và
+bằng gross trừ costs cộng signed funding cash flow; transition chỉ theo lifecycle contract.
+Trước settlement, `fees` là zero instance có các cost bằng zero, không phải `None`.
 
 ## 5. Ownership và mutation policy
 
