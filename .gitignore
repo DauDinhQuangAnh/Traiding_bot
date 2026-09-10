@@ -2,8 +2,9 @@
 .env
 .env.*
 !.env.example
-config/*.yaml
-!config/*.example.yaml
+config/local.yaml
+config/*.local.yaml
+config/private*.yaml
 
 # Python
 __pycache__/
