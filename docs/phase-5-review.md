@@ -2,14 +2,12 @@
 
 ## Review status
 
-`NEEDS_WORK`
+`APPROVED`
 
-The PHASE 5 safety-remediation baseline `1f2b59a` passed GitHub Actions Python 3.12
-(run #5, job `python-312`, SUCCESS). Final Decimal-context closure passes all local gates,
-but its exact commit has not been pushed or run remotely. All automated acceptance
-criteria through the pushed remediation baseline pass. This document does not
-auto-approve PHASE 5: exact-final-commit CI and explicit human review are still required.
-PHASE 4 remains the last approved phase.
+The final PHASE 5 Decimal-determinism closure commit
+`191fd72c8b5620a61e4a8af17b91b0d05de00a55` passed GitHub Actions run #6, job
+`python-312`, with result SUCCESS. External human review approved PHASE 5. PHASE 5 is
+therefore the last approved phase; PHASE 6 remains not yet approved.
 
 ## Evidence baseline
 
@@ -19,6 +17,9 @@ PHASE 4 remains the last approved phase.
 - PHASE 5 acceptance-evidence baseline: `deb6d2d`; GitHub Actions Python 3.12 PASS.
 - PHASE 5 safety-remediation baseline: `1f2b59ac0df454fad483bbf13901d0879858f80c`;
   GitHub Actions run #5, job `python-312`, SUCCESS.
+- PHASE 5 final Decimal-determinism closure:
+  `191fd72c8b5620a61e4a8af17b91b0d05de00a55`; GitHub Actions run #6, job
+  `python-312`, SUCCESS; external human review APPROVED.
 - Local interpreter: Python 3.11.9 at `D:\hoctap\python\python.exe`.
 - Final-remediation local gate result before commit: 188 tests passed with 85% total
   branch-aware coverage. Critical PHASE 5 modules: engine 81%, execution 93%, portfolio
@@ -42,10 +43,9 @@ PHASE 4 remains the last approved phase.
 | Decimal context determinism | PASS locally | Fill construction and last-mile validation use explicit `CalculationConfig`; configured precision changes audited arithmetic and execution identity; ambient precision/rounding variants produce identical canonical results without context leakage. |
 | Exact boundary semantics | PASS locally | Equality passes for deviation tolerance, minimum RR, risk budget and margin capacity; one-step violations reject with exact canonical reason codes; repeated results are byte-identical. |
 
-Safety-remediation CI at `1f2b59a` is PASS. Final Decimal-remediation CI is `PENDING`:
-local results cannot substitute for a Python 3.12 workflow on the exact final commit.
-All automated acceptance criteria pass at their recorded evidence scope. Final PHASE 5
-approval remains external/human.
+Safety-remediation CI at `1f2b59a` and final Decimal-remediation CI at `191fd72` both
+pass. All automated acceptance criteria pass, and external human review approved the
+final commit.
 
 ## Acceptance criteria
 
@@ -107,7 +107,7 @@ approval remains external/human.
 | 54 | No AI integration | PASS | No AI dependency or runtime path added. |
 | 55 | No OKX/network client | PASS | Backtest consumes local repository ports only; no exchange SDK, credential, or network code added. |
 | 56 | Existing PHASE 1–4 tests pass | PASS | Full local pytest suite passes without skipped/disabled legacy tests. |
-| 57 | Python 3.12 CI passes pushed remediation baseline | PASS | Commit `1f2b59a`; GitHub Actions run #5; job `python-312`; result SUCCESS. Exact final Decimal-remediation commit CI remains pending until pushed. |
+| 57 | Python 3.12 CI passes final commit | PASS | Commit `191fd72c8b5620a61e4a8af17b91b0d05de00a55`; GitHub Actions run #6; job `python-312`; result SUCCESS. |
 | 58 | Ruff passes | PASS | `ruff check src tests` and `ruff format --check src tests` pass locally. |
 | 59 | Mypy passes | PASS | Strict `mypy src` passes locally. |
 | 60 | `docs/backtesting.md` complete | PASS | All 26 required sections are present. |
@@ -135,10 +135,9 @@ declared boundaries. It is not liquidation-aware, order-book-aware, latency-awar
 evidence of profitable live behavior. No strategy parameter was changed in response to
 backtest output.
 
-## Required external review
+## Approval record
 
-1. Commit the PHASE 5 remediation and evidence locally.
-2. Push once when explicitly requested or when the agreed batch is ready.
-3. Require GitHub Actions Python 3.12 to pass the exact final Decimal-remediation commit.
-4. Obtain explicit human review before changing PHASE 5 to `APPROVED` or starting
-   PHASE 6.
+- Final commit: `191fd72c8b5620a61e4a8af17b91b0d05de00a55`.
+- CI: GitHub Actions run #6, job `python-312`, SUCCESS.
+- External human review: APPROVED.
+- PHASE 6 may proceed under review but requires its own explicit human approval.

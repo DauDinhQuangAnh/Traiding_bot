@@ -1,10 +1,9 @@
 # Repository guidance
 
-- Last approved phase: PHASE 4 historical-data foundation. Baseline `635303d` and
-  version-identity remediation `68bedeb` are externally approved; GitHub Actions
-  Python 3.12 passed for `68bedeb`. PHASE 5 deterministic backtest implementation is
-  explicitly authorized and in progress, but is not approved until every acceptance
-  criterion has evidence and human review approves it.
+- Last approved phase: PHASE 5 deterministic backtest foundation. Final commit
+  `191fd72` passed GitHub Actions run #6 job `python-312` and received explicit external
+  human approval. PHASE 6 may be implemented, but may not be marked `APPROVED` without
+  explicit human review.
 - Source of truth: `README.md` and the approved documents under `docs/`, especially
   `technical-specification.md`, `domain-models.md`, `configuration.md`,
   `market-data.md`, `regime-detection.md`, `strategy.md`, `position-sizing.md`, and
@@ -20,6 +19,7 @@
   for every contract change.
 - Before handoff, run pytest, Ruff lint, Ruff format check, mypy, and compileall using
   the project commands documented in `README.md`.
-- PHASE 4 handoff: `docs/phase-4-plan.md`, `docs/historical-data.md`, and
-  `docs/phase-4-review.md`. PHASE 5 source of truth: `docs/phase-5-plan.md`; production
-  datasets and generated backtest artifacts stay outside Git.
+- PHASE 5 source of truth: `docs/phase-5-plan.md`, `docs/backtesting.md`, and
+  `docs/phase-5-review.md`. PHASE 6 is under review and must preserve the frozen PHASE 5
+  business semantics. Production datasets and generated backtest/validation artifacts
+  stay outside Git.

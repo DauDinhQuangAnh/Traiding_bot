@@ -11,7 +11,8 @@ an toàn không đủ rõ ràng.
 - PHASE 2 Design Gate — **APPROVED**
 - PHASE 3 — Deterministic Offline Core: **APPROVED after remediation**
 - PHASE 4 — Historical Data Foundation: **APPROVED after version-identity remediation**
-- PHASE 5 — Backtest Engine: **IN PROGRESS**
+- PHASE 5 — Backtest Engine: **APPROVED after final Decimal-determinism closure**
+- PHASE 6 — Out-of-Sample Validation and Local Dashboard: **IN PROGRESS / NOT YET APPROVED**
 - Phạm vi thị trường dự kiến: `BTC-USDT-SWAP`, OKX Demo Trading
 - Live trading: **không thuộc phạm vi hiện tại và phải luôn mặc định tắt**
 - Repository có package Python chạy offline; không có mã kết nối hoặc gửi lệnh tới OKX.
@@ -63,6 +64,16 @@ API key, network I/O, order submission, trading loop và live trading vẫn ngo�
 - [Implementation plan](docs/phase-5-plan.md)
 - [Backtesting contract](docs/backtesting.md)
 - [Acceptance review](docs/phase-5-review.md)
-- Last approved phase remains PHASE 4 while implementation and review are in progress.
+- Final commit: `191fd72`; GitHub Actions run #6 job `python-312` passed on the exact
+  commit, and external human review approved PHASE 5.
 - PHASE 5 is deterministic historical simulation only; no Demo/Live execution,
   exchange client, parameter optimization, AI integration, or profitability claim.
+
+## PHASE 6
+
+- Status: **IN PROGRESS / NOT YET APPROVED**.
+- Scope is chronological out-of-sample validation, fixed-strategy robustness evidence,
+  and a local read-only dashboard foundation.
+- PHASE 6 does not authorize exchange connectivity, Demo/Live trading, automatic
+  optimization, AI integration, parameter tuning against the final test set, or a
+  profitability claim.
