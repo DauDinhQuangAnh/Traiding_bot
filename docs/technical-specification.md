@@ -415,7 +415,8 @@ Every DecisionRecord carries:
 - `config_version`: canonical merged non-secret config hash.
 - `data_version`: immutable dataset/source/revision manifest hash.
 
-Instrument and fee schedule versions are also persisted where sizing/PnL uses them.
+Instrument and fee/cost-model versions are also persisted on every risk decision and
+approved plan where sizing/PnL uses them.
 Reproduction requires archived config, data manifest, code commit, prior range/state
 events and deterministic clock/event ordering. Nếu không tái tạo được “tại sao LONG
 tại thời điểm này”, run không đạt acceptance.

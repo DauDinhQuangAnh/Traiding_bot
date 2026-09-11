@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
-from trading_bot.config.models import StrategyConfig
+from trading_bot.config.calculation import calculation_context
+from trading_bot.config.models import CalculationConfig, StrategyConfig
 from trading_bot.domain.decision_models import SignalAssessment, SignalComponent, TradeCandidate
 from trading_bot.domain.enums import (
     BreakoutDirection,
@@ -93,6 +94,8 @@ def _select_setup(
         )
     context = levels.range_context
     if regime.regime is not MarketRegime.SIDEWAY or context is None:
+        return None
+    if context.reason_codes:
         return None
     if context.breakout_state is BreakoutState.RETEST_VALIDATED:
         side = (
@@ -353,8 +356,28 @@ def evaluate_strategy(
     levels: LevelSet,
     costs: CostRateEstimate,
     config: StrategyConfig,
+    calculation: CalculationConfig,
     minimum_rr: Decimal,
 ) -> StrategyOutcome:
+    with calculation_context(calculation):
+        return _evaluate_strategy(market, indicators, regime, levels, costs, config, minimum_rr)
+
+
+def _evaluate_strategy(
+    market: MarketSnapshot,
+    indicators: IndicatorSnapshot,
+    regime: RegimeAssessment,
+    levels: LevelSet,
+    costs: CostRateEstimate,
+    config: StrategyConfig,
+    minimum_rr: Decimal,
+) -> StrategyOutcome:
+    compatible_inputs = (
+        indicators.market_snapshot_id == market.snapshot_id
+        and indicators.symbol == market.symbol == levels.symbol == regime.symbol
+        and indicators.as_of == market.as_of == levels.as_of == regime.as_of
+        and indicators.versions.config_version == levels.config_version == regime.config_version
+    )
     m15 = indicators.values_by_timeframe.get(Timeframe.M15)
     setup_side = (
         None
@@ -362,18 +385,35 @@ def evaluate_strategy(
         else _select_setup(regime, levels, market.candles_15m[-1].close, m15.ema20, m15.atr, config)
     )
     reasons: list[ReasonCode] = []
-    if not indicators.is_ready:
+    if not compatible_inputs:
+        reasons.append(ReasonCode.VERSION_MISMATCH)
+    elif not indicators.is_ready:
         reasons.append(ReasonCode.INDICATOR_NOT_READY)
     elif regime.regime is MarketRegime.UNCERTAIN:
         reasons.append(ReasonCode.REGIME_UNCERTAIN)
     elif regime.regime is MarketRegime.HIGH_VOLATILITY:
         reasons.append(ReasonCode.HIGH_VOLATILITY_BLOCKED)
     elif setup_side is None:
-        reasons.append(
-            ReasonCode.SIDEWAY_MIDDLE_RANGE
-            if regime.regime is MarketRegime.SIDEWAY
-            else ReasonCode.NO_SIGNAL
-        )
+        context = levels.range_context
+        if context is not None and ReasonCode.RANGE_STALE in context.reason_codes:
+            reasons.append(ReasonCode.RANGE_STALE)
+        elif context is not None and context.breakout_state in {
+            BreakoutState.BREAKOUT_DETECTED,
+            BreakoutState.WAIT_CONFIRMATION,
+        }:
+            reasons.append(ReasonCode.BREAKOUT_CONFIRMATION_PENDING)
+        elif context is not None and context.breakout_state is BreakoutState.WAIT_RETEST:
+            reasons.append(ReasonCode.RETEST_PENDING)
+        elif context is not None and context.breakout_state is BreakoutState.INVALIDATED:
+            reasons.append(ReasonCode.RETEST_INVALIDATED)
+        elif context is not None and context.breakout_state is BreakoutState.EXPIRED:
+            reasons.append(ReasonCode.RETEST_EXPIRED)
+        else:
+            reasons.append(
+                ReasonCode.SIDEWAY_MIDDLE_RANGE
+                if regime.regime is MarketRegime.SIDEWAY
+                else ReasonCode.NO_SIGNAL
+            )
     elif setup_side[0] not in config.allowed_setups:
         reasons.append(ReasonCode.SETUP_DISABLED)
     setup = setup_side[0] if setup_side else SetupType.TREND_PULLBACK
@@ -386,6 +426,75 @@ def evaluate_strategy(
     )
     long_score = sum((component.long_points for component in components), ZERO)
     short_score = sum((component.short_points for component in components), ZERO)
+    long_count = sum(component.long_points > ZERO for component in components)
+    short_count = sum(component.short_points > ZERO for component in components)
+    hard_gate_results: list[GateResult] = []
+    if setup_side is not None and setup is SetupType.SIDEWAY_MEAN_REVERSION:
+        bullish, bearish = candle_confirmation(market.candles_5m[-1], config)
+        confirmation_passed = bullish if side is TradeSide.LONG else bearish
+        hard_gate_results.append(
+            GateResult(
+                "sideway_directional_confirmation",
+                confirmation_passed,
+                None if confirmation_passed else ReasonCode.NO_CONFIRMATION,
+                ONE if confirmation_passed else ZERO,
+                ONE,
+                "binary",
+            )
+        )
+        if not confirmation_passed:
+            reasons.append(ReasonCode.NO_CONFIRMATION)
+        for component_name in (SignalComponentName.MOMENTUM, SignalComponentName.VOLUME):
+            component = next(item for item in components if item.component_name is component_name)
+            points = component.long_points if side is TradeSide.LONG else component.short_points
+            passed = component.max_points == ZERO or points > ZERO
+            hard_gate_results.append(
+                GateResult(
+                    f"sideway_{component_name.value.lower()}_directional",
+                    passed,
+                    None if passed else ReasonCode.NO_SIGNAL,
+                    points,
+                    ZERO,
+                    "point",
+                )
+            )
+            if not passed:
+                reasons.append(ReasonCode.NO_SIGNAL)
+    if setup_side is not None:
+        chosen_score = long_score if side is TradeSide.LONG else short_score
+        opposite_score = short_score if side is TradeSide.LONG else long_score
+        chosen_count = long_count if side is TradeSide.LONG else short_count
+        threshold = config.long_threshold if side is TradeSide.LONG else config.short_threshold
+        score_gates = (
+            (
+                "confluence",
+                chosen_count >= config.minimum_nonzero_components,
+                ReasonCode.CONFLUENCE_TOO_LOW,
+                Decimal(chosen_count),
+                Decimal(config.minimum_nonzero_components),
+                "count",
+            ),
+            (
+                "score_threshold",
+                chosen_score >= threshold,
+                ReasonCode.SCORE_TOO_LOW,
+                chosen_score,
+                threshold,
+                "point",
+            ),
+            (
+                "score_difference",
+                chosen_score - opposite_score >= config.minimum_score_difference,
+                ReasonCode.SCORE_DIFFERENCE_TOO_SMALL,
+                chosen_score - opposite_score,
+                config.minimum_score_difference,
+                "point",
+            ),
+        )
+        hard_gate_results.extend(
+            GateResult(name, passed, None if passed else reason, observed, limit, unit)
+            for name, passed, reason, observed, limit, unit in score_gates
+        )
     assessment_id = deterministic_id(
         "signal-assessment", market.evaluation_id, regime.assessment_id, components
     )
@@ -398,6 +507,7 @@ def evaluate_strategy(
             None,
             None,
         ),
+        *hard_gate_results,
     )
     assessment = SignalAssessment(
         assessment_id,
@@ -406,14 +516,13 @@ def evaluate_strategy(
         short_score,
         components,
         gates,
-        tuple(reasons),
+        tuple(dict.fromkeys(reasons)),
         market.as_of,
         indicators.versions,
     )
     if reasons or setup_side is None:
-        return StrategyOutcome(assessment, TradeDecision.NO_TRADE, None, tuple(reasons))
-    long_count = sum(component.long_points > ZERO for component in components)
-    short_count = sum(component.short_points > ZERO for component in components)
+        canonical_reasons = tuple(dict.fromkeys(reasons))
+        return StrategyOutcome(assessment, TradeDecision.NO_TRADE, None, canonical_reasons)
     allows_long, allows_short = side is TradeSide.LONG, side is TradeSide.SHORT
     long_ok = (
         allows_long
@@ -457,7 +566,36 @@ def evaluate_strategy(
     decision = TradeDecision.LONG if side is TradeSide.LONG else TradeDecision.SHORT
     if candidate is None:
         decision = TradeDecision.NO_TRADE
-        assessment = replace(assessment, reason_codes=candidate_reasons)
+        assessment = replace(
+            assessment,
+            gates=(
+                *assessment.gates,
+                GateResult(
+                    "cost_adjusted_rr",
+                    False,
+                    candidate_reasons[0],
+                    None,
+                    minimum_rr,
+                    "ratio",
+                ),
+            ),
+            reason_codes=candidate_reasons,
+        )
+    else:
+        assessment = replace(
+            assessment,
+            gates=(
+                *assessment.gates,
+                GateResult(
+                    "cost_adjusted_rr",
+                    True,
+                    None,
+                    candidate.planned_rr_after_costs,
+                    minimum_rr,
+                    "ratio",
+                ),
+            ),
+        )
     return StrategyOutcome(assessment, decision, candidate, candidate_reasons)
 
 

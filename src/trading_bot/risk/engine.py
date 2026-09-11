@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
-from trading_bot.config.models import RiskConfig
+from trading_bot.config.calculation import calculation_context
+from trading_bot.config.models import CalculationConfig, RiskConfig
 from trading_bot.domain.decision_models import TradeCandidate
 from trading_bot.domain.enums import ReasonCode, RiskAction, TradeSide
 from trading_bot.domain.identifiers import approved_plan_id, risk_approval_id, risk_decision_id
@@ -39,6 +40,8 @@ def _loss_per_contract(
 def _decision(
     candidate: TradeCandidate,
     context: RiskContext,
+    metadata: InstrumentMetadata,
+    rates: CostRateEstimate,
     action: RiskAction,
     reasons: tuple[ReasonCode, ...],
     observed: dict[str, Decimal],
@@ -50,8 +53,9 @@ def _decision(
     identifier = risk_decision_id(
         candidate.candidate_id,
         context.risk_context_id,
-        candidate.versions.config_version,
         context.state_version,
+        candidate.versions.config_version,
+        metadata.version,
     )
     return RiskDecision(
         identifier,
@@ -66,6 +70,8 @@ def _decision(
         now + ttl,
         candidate.versions.config_version,
         context.state_version,
+        metadata.version,
+        rates.model_version,
     )
 
 
@@ -75,9 +81,49 @@ def evaluate_risk(
     metadata: InstrumentMetadata,
     rates: CostRateEstimate,
     config: RiskConfig,
+    calculation: CalculationConfig,
     approval_ttl: timedelta,
     now: datetime,
     metadata_max_age: timedelta | None = None,
+) -> RiskOutcome:
+    with calculation_context(calculation):
+        try:
+            return _evaluate_risk(
+                candidate,
+                context,
+                metadata,
+                rates,
+                config,
+                approval_ttl,
+                now,
+                metadata_max_age,
+            )
+        except (DecimalException, ArithmeticError):
+            return RiskOutcome(
+                _decision(
+                    candidate,
+                    context,
+                    metadata,
+                    rates,
+                    RiskAction.HALT,
+                    (ReasonCode.NUMERICAL_ERROR,),
+                    {},
+                    now,
+                    approval_ttl,
+                ),
+                None,
+            )
+
+
+def _evaluate_risk(
+    candidate: TradeCandidate,
+    context: RiskContext,
+    metadata: InstrumentMetadata,
+    rates: CostRateEstimate,
+    config: RiskConfig,
+    approval_ttl: timedelta,
+    now: datetime,
+    metadata_max_age: timedelta | None,
 ) -> RiskOutcome:
     observed = {
         "daily_net_pnl": context.daily_net_pnl,
@@ -103,6 +149,8 @@ def evaluate_risk(
             _decision(
                 candidate,
                 context,
+                metadata,
+                rates,
                 RiskAction.HALT,
                 tuple(dict.fromkeys(halt_reasons)),
                 observed,
@@ -114,11 +162,17 @@ def evaluate_risk(
     reject: list[ReasonCode] = []
     if candidate.symbol != context.symbol or metadata.symbol != candidate.symbol:
         reject.append(ReasonCode.INSTRUMENT_UNSUPPORTED)
-    if candidate.versions.config_version != context.config_version:
+    if (
+        candidate.versions.config_version != context.config_version
+        or context.state_version != context.position_state.state_version
+        or candidate.cost_rate_estimate.model_version != rates.model_version
+    ):
         reject.append(ReasonCode.VERSION_MISMATCH)
     if not metadata.is_linear_quote_margined:
         reject.append(ReasonCode.INSTRUMENT_UNSUPPORTED)
-    if metadata_max_age is not None and now - metadata.effective_at > metadata_max_age:
+    if metadata.effective_at > now or (
+        metadata_max_age is not None and now - metadata.effective_at > metadata_max_age
+    ):
         reject.append(ReasonCode.INSTRUMENT_METADATA_STALE)
     if context.daily_trade_count >= config.max_daily_trades:
         reject.append(ReasonCode.DAILY_TRADE_LIMIT)
@@ -135,6 +189,8 @@ def evaluate_risk(
             _decision(
                 candidate,
                 context,
+                metadata,
+                rates,
                 RiskAction.REJECT,
                 tuple(dict.fromkeys(reject)),
                 observed,
@@ -200,6 +256,8 @@ def evaluate_risk(
             _decision(
                 candidate,
                 context,
+                metadata,
+                rates,
                 RiskAction.REJECT,
                 tuple(dict.fromkeys(reject)),
                 observed,
@@ -209,11 +267,13 @@ def evaluate_risk(
             None,
         )
     risk_quantity = budget / per_contract
+    exposure_capacity = max(ZERO, config.max_total_exposure - context.current_notional)
+    margin_capacity = context.available_margin * leverage * (ONE - config.margin_buffer_ratio)
     notional_cap = min(
         config.max_position_notional,
-        max(ZERO, config.max_total_exposure - context.current_notional),
+        exposure_capacity,
         context.eligible_equity * config.max_leverage,
-        context.available_margin * leverage * (ONE - config.margin_buffer_ratio),
+        margin_capacity,
         metadata.notional(metadata.maximum_order_quantity, entry),
     )
     cap_quantity = notional_cap / (metadata.contract_value_base * entry)
@@ -223,6 +283,10 @@ def evaluate_risk(
     observed.update({"quantity": quantity, "notional": notional, "worst_case_loss": worst_loss})
     if quantity < metadata.minimum_quantity or notional < metadata.minimum_notional:
         reject.append(ReasonCode.POSITION_SIZE_TOO_SMALL)
+    if exposure_capacity < metadata.minimum_notional:
+        reject.append(ReasonCode.POSITION_CAP_EXCEEDED)
+    if margin_capacity < metadata.minimum_notional:
+        reject.append(ReasonCode.INSUFFICIENT_MARGIN)
     if (
         notional > config.max_position_notional
         or context.current_notional + notional > config.max_total_exposure
@@ -255,6 +319,8 @@ def evaluate_risk(
             _decision(
                 candidate,
                 context,
+                metadata,
+                rates,
                 RiskAction.REJECT,
                 tuple(dict.fromkeys(reject)),
                 observed,
@@ -263,7 +329,17 @@ def evaluate_risk(
             ),
             None,
         )
-    provisional = _decision(candidate, context, RiskAction.REJECT, (), observed, now, approval_ttl)
+    provisional = _decision(
+        candidate,
+        context,
+        metadata,
+        rates,
+        RiskAction.REJECT,
+        (),
+        observed,
+        now,
+        approval_ttl,
+    )
     approval = risk_approval_id(provisional.risk_decision_id)
     fee_breakdown = FeeBreakdown(
         entry_fee,
@@ -307,10 +383,13 @@ def evaluate_risk(
         candidate.versions.config_version,
         context.state_version,
         metadata.version,
+        rates.model_version,
     )
     decision = _decision(
         candidate,
         context,
+        metadata,
+        rates,
         RiskAction.APPROVE,
         (),
         observed,

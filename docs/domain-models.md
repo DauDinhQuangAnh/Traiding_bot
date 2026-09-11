@@ -359,7 +359,7 @@ Source: `risk`. Consumers: executor gate, state machine, journal.
 | `risk_approval_id` | `str` | Yes |
 | `approved_plan_id` | `str` | Yes |
 | `evaluated_at`, `expires_at` | `datetime` | No |
-| `config_version`, `state_version` | `str` | No |
+| `config_version`, `state_version`, `instrument_version`, `cost_model_version` | `str` | No |
 
 Validation: APPROVE có approval/plan ID và không có hard-failure reason; REJECT/HALT
 không có hai ID này; expiry sau evaluated time; HALT phát kill-switch event.
@@ -380,7 +380,7 @@ Source: `risk`. Consumers: execution, positions, journal.
 | `leverage` | `Decimal` | No |
 | `fee_estimate` | `FeeBreakdown` | No |
 | `created_at`, `expires_at` | `datetime` | No |
-| `config_version`, `state_version`, `instrument_version` | `str` | No |
+| `config_version`, `state_version`, `instrument_version`, `cost_model_version` | `str` | No |
 
 Validation: quantity/notional dương và precision hợp lệ; worst-case loss không vượt
 risk budget; leverage không vượt cap; stop/targets đúng phía; plan one-shot và có TTL.

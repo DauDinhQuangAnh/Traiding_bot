@@ -5,7 +5,8 @@ from __future__ import annotations
 from decimal import Decimal, localcontext
 from itertools import pairwise
 
-from trading_bot.config.models import IndicatorConfig
+from trading_bot.config.calculation import calculation_context
+from trading_bot.config.models import CalculationConfig, IndicatorConfig
 from trading_bot.domain.enums import ReasonCode, Timeframe
 from trading_bot.domain.errors import IndicatorCalculationError
 from trading_bot.domain.identifiers import deterministic_id
@@ -133,9 +134,8 @@ def adx_series(candles: tuple[Candle, ...], period: int) -> tuple[Decimal | None
 def percentile_rank(history: tuple[Decimal, ...], value: Decimal) -> Decimal:
     if not history:
         raise IndicatorCalculationError("percentile history is empty")
-    below = sum(item < value for item in history)
-    equal = sum(item == value for item in history)
-    return HUNDRED * (Decimal(below) + Decimal(equal) / Decimal(2)) / Decimal(len(history))
+    at_or_below = sum(item <= value for item in history)
+    return HUNDRED * Decimal(at_or_below) / Decimal(len(history))
 
 
 def bollinger_series(
@@ -147,8 +147,7 @@ def bollinger_series(
         middle = _mean(window)
         variance = sum(((value - middle) ** 2 for value in window), ZERO) / Decimal(period)
         with localcontext() as context:
-            context.prec = 34
-            deviation = variance.sqrt() * multiplier
+            deviation = variance.sqrt(context=context) * multiplier
         result[index] = (middle + deviation, middle, middle - deviation)
     return tuple(result)
 
@@ -219,6 +218,16 @@ def calculate_values(candles: tuple[Candle, ...], config: IndicatorConfig) -> In
 
 
 def calculate_indicators(
+    snapshot: MarketSnapshot,
+    config: IndicatorConfig,
+    calculation: CalculationConfig,
+    versions: VersionSet,
+) -> IndicatorSnapshot:
+    with calculation_context(calculation):
+        return _calculate_indicators(snapshot, config, versions)
+
+
+def _calculate_indicators(
     snapshot: MarketSnapshot, config: IndicatorConfig, versions: VersionSet
 ) -> IndicatorSnapshot:
     series = {

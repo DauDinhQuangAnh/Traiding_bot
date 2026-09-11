@@ -1,91 +1,95 @@
-# PHASE 3 Review — Project Scaffold + Core Domain Implementation
+# PHASE 3 Review — Remediation and Approval
 
 ## 1. Status
 
-**PHASE 3: COMPLETE — offline core only.**
+**PHASE 3: APPROVED — deterministic offline core only.**
 
-The repository now contains an importable deterministic Python core and local SQLite
-journal. It contains no exchange SDK, OKX adapter, network client, credential handling,
-order submission loop or live-trading path. Those remain explicitly out of scope.
+This approval covers the offline domain, application pipeline, deterministic replay,
+and local SQLite journal. PHASE 4 has not started. No exchange SDK, network client,
+credential handling, order submission, Demo loop, or Live-trading path is present.
 
-## 2. Delivered scope
+## 2. Contract gaps found and fixed
 
-- `src/trading_bot/domain`: canonical enums, typed errors, immutable models, UTC and
-  Decimal validation, canonical serialization, deterministic identifiers.
-- `src/trading_bot/config`: strict YAML layering, typed config construction,
-  cross-field validation, secret redaction/exclusion and stable config hashing.
-- `src/trading_bot/market_data`: closed-candle series/snapshot validation plus Decimal
-  EMA, Wilder RSI/ATR/ADX, Bollinger, volume and percentile calculations.
-- `src/trading_bot/levels`: confirmed swings, market structure, clustered levels,
-  range construction and closed-candle breakout/confirmation/retest transitions.
-- `src/trading_bot/regime`: canonical weighted evidence, high-volatility precedence,
-  conflict handling and persisted confirmation count.
-- `src/trading_bot/strategy`: setup selection, candle confirmation, six-component
-  scoring, confluence/difference gates and quantity-free candidate construction.
-- `src/trading_bot/risk`: adverse tick rounding, stop gates, fee/slippage/funding-aware
-  sizing, lot/notional/margin/exposure caps and the sole `ApprovedTradePlan` factory.
-- `src/trading_bot/application`: infrastructure-neutral DTOs/ports, global/trade state
-  machines and pure offline evaluation orchestration.
-- `src/trading_bot/infrastructure`: deterministic fakes and transactional append-only
-  SQLite journal with event-ID idempotency and stream revision constraints.
-- `config/base.example.yaml`, `migrations/001_initial.sql`, packaging and quality-tool
-  configuration.
-
-## 3. Contract clarifications made during implementation
-
-Two formulas in the approved specification referenced values absent from their model
-field tables. The smallest explicit additions were documented in `domain-models.md`:
-
-- `RangeContext.reference_close`, required by the canonical `position_in_range` formula.
-- `TradeCandidate.reference_atr`, required for Risk Engine stop-distance revalidation.
-
-Neither addition introduces a new trading rule or calibrated threshold.
-
-## 4. Verification evidence
-
-Commands were run from the repository root with the user-supplied interpreter at
-`D:\hoctap\python\python.exe`:
-
-| Gate | Command | Result |
+| Area | Discrepancy | Remediation |
 |---|---|---|
-| Tests | `python -m pytest -q` | PASS — 25 passed |
-| Property tests | included in pytest | PASS — quantization and approved-loss budget invariants |
-| Golden/replay | included in pytest | PASS — stable serialization/ID and byte-identical replay |
-| Coverage | `python -m pytest --cov=trading_bot --cov-report=term -q` | PASS — 76% |
-| Lint | `ruff check src tests` | PASS |
-| Format | `ruff format --check src tests` | PASS |
-| Types | `python -m mypy src` | PASS — no issues in 34 source files |
-| Compile/import | `python -m compileall -q src` | PASS |
-| Offline boundary | source/import architecture tests | PASS |
+| Range persistence | `evaluate_market()` rebuilt `RangeContext` at `NONE` on each M15 evaluation. | Prior range is now an explicit, serializable pipeline input. Compatible state advances deterministically; range/config/data identity changes reset it. Age, stale, hold, expiry, invalidation, and retest transitions are preserved. |
+| Percentile | Ties used mid-rank instead of the canonical inclusive CDF. | Uses `100 * count(value <= current) / count(window)`. |
+| Decimal policy | Calculations ignored `CalculationConfig`, and Bollinger used precision 34. | A scoped `decimal.localcontext()` applies configured precision and rounding without mutating global context across indicator, level, regime, strategy, and risk engines. |
+| Risk identity/audit | `risk_decision_id` omitted instrument metadata version. Fee/cost version was not persisted on decisions/plans. | IDs include candidate, context, state, config, and instrument versions. Risk output records also retain instrument and fee/cost model versions. |
+| Market data | Duration-only candles allowed misaligned intervals; snapshot failure was exception-only. | Enforces UTC boundaries, order, duplicates, gaps, future/closed status, identity, M5 children, H1 context, canonical `as_of`, and quote freshness. Snapshot building returns a typed failure that orchestration converts to `NO_TRADE` with a canonical reason. |
+| Strategy gates | SIDEWAY eligibility could depend implicitly on score weights. | Closed-candle confirmation, directional momentum, directional volume, score, confluence, score difference, and cost-adjusted RR are explicit gates, including documented disabled-component semantics. |
+| Test depth | Direct boundary/state/version tests and stateful replay evidence were incomplete. | Added focused market-data, regime, strategy, risk, breakout sequence, property, and multi-candle replay coverage. |
+| Python 3.12 evidence | No hosted Python 3.12 quality gate existed. | Added a GitHub Actions Python 3.12 workflow for pytest, Ruff, mypy, and compileall. |
 
-The final verification commands must be rerun after this review file is added; the
-handoff reports their final output rather than relying only on this table.
+The two intentional PHASE 3 model clarifications remain documented:
+`RangeContext.reference_close` supplies the canonical range-position formula, and
+`TradeCandidate.reference_atr` permits Risk Engine stop-distance revalidation. Neither
+adds a strategy rule or changes a calibrated threshold.
 
-## 5. Runtime note
+## 3. Determinism and replay evidence
 
-Project metadata and static-analysis targets remain Python `>=3.12` as specified. The
-interpreter supplied in `D:\hoctap\python` reports Python `3.11.9`, so the local runtime
-tests also demonstrate compatibility with that older interpreter. A native Python 3.12
-CI run should be added before PHASE 4; no requirement or source metadata was weakened to
-hide the local version mismatch.
+- Calculation policy is scoped per call and never mutates the process-wide Decimal
+  context.
+- Prior regime and range/breakout state are explicit replay inputs; there is no hidden
+  mutable trading state.
+- Level, range, candidate, and risk IDs include their required logical/version inputs.
+- A multi-candle sequence is replayed twice from the same initial state. Canonical
+  bytes for every decision, regime assessment, range transition, signal assessment,
+  and candidate ID are equal.
+- Future candles are rejected or excluded by point-in-time selection, so adding future
+  source data cannot change an earlier `as_of` result.
 
-## 6. Safety and scope audit
+## 4. Tests added
 
-- `execution.enabled=false`, `dry_run=true` and `enable_live_trading=false` are enforced
-  by typed configuration, not merely supplied as example defaults.
-- Live environment is rejected during configuration construction.
-- No API key or secret is represented by `AppConfig`; known secret names are redacted
-  from logs and omitted from hashes.
-- No package under `domain` or `application` imports `infrastructure`.
-- A source scan rejects common network/exchange imports in `src`.
-- SQLite critical events are written transactionally; duplicate event IDs are
-  idempotent and stream revisions are unique/monotonic.
+- Breakout progression: normal range → detected → confirmation → wait retest → valid
+  retest → `BREAKOUT_RETEST` eligibility, plus failed hold, expired/invalid retest,
+  stale range, and identity reset.
+- Percentile tie formula and minimum, maximum, all-equal, single-value, and repeated
+  boundaries.
+- Calculation precision/rounding configuration behavior.
+- Candle/snapshot boundary alignment, gaps, duplicates, ordering, future data, closed
+  status, M5/M15/H1 consistency, canonical staleness, quote freshness, and identity.
+- Direct SIDEWAY, trend pullback, conflict, score, and RR gate boundaries.
+- Direct regime candidate, conflict, persistence, high-volatility precedence, version,
+  invalid ATR, and exact-threshold cases.
+- Risk geometry and every mandatory safety/capacity/cost/version boundary, including
+  instrument-version ID regression.
+- Property checks: approvals never exceed risk budget; any active hard-gate failure
+  cannot approve.
 
-## 7. Remaining work for later phases
+## 5. Verification evidence
 
-- Native Python 3.12 CI and expanded coverage around rare validator/failure branches.
-- Backtest calibration of every `BACKTEST_REQUIRED` value; the example profile is test
-  data and is not a trading recommendation.
-- Historical fee/funding schedules and gap/market-impact scenarios.
-- Exchange-specific Demo adapter, reconciliation integration and contract tests only
-  after an explicit later-phase approval. Live trading remains disabled.
+Commands are run from the repository root. Local verification uses the interpreter
+supplied by the user at `D:\hoctap\python\python.exe`:
+
+| Gate | Exact command | Result |
+|---|---|---|
+| Tests | `D:\hoctap\python\python.exe -m pytest -q` | PASS — 71 passed |
+| Coverage | `D:\hoctap\python\python.exe -m pytest --cov=trading_bot --cov-report=term -q` | PASS — 71 passed, 83% total |
+| Ruff lint | `D:\hoctap\python\Scripts\ruff.exe check src tests` | PASS |
+| Ruff format | `D:\hoctap\python\Scripts\ruff.exe format --check src tests` | PASS |
+| Types | `D:\hoctap\python\python.exe -m mypy src` | PASS — no issues in 35 source files |
+| Compile | `D:\hoctap\python\python.exe -m compileall -q src` | PASS |
+| Offline boundaries | included in pytest | PASS — forbidden network imports and dependency direction checked |
+
+The table records the final local quality-gate run for this remediation commit.
+
+## 6. Python 3.12 CI status
+
+`.github/workflows/ci.yml` is configured to install the project and run all required
+quality gates on Python 3.12. The supplied local interpreter reports Python 3.11.9, so
+native 3.12 execution remains pending the first GitHub Actions run after a human-approved
+push. The project requirement remains Python `>=3.12`; it was not weakened.
+
+## 7. Safety and remaining risks
+
+- `execution.enabled=false`, `dry_run=true`, and `enable_live_trading=false` remain
+  enforced by typed configuration. Live configuration is rejected.
+- No exchange/network dependencies or execution path were introduced.
+- Example thresholds remain `BACKTEST_REQUIRED`; passing deterministic tests is not
+  evidence of trading profitability.
+- Historical fee/funding schedules, market impact, and exchange-specific reconciliation
+  belong to later explicitly approved phases.
+- Hosted Python 3.12 CI evidence is pending a push; local tests ran on Python 3.11.9.
+
+Human review is required before any PHASE 4 work.

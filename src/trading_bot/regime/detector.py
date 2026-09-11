@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from trading_bot.config.models import RegimeConfig
+from trading_bot.config.calculation import calculation_context
+from trading_bot.config.models import CalculationConfig, RegimeConfig
 from trading_bot.domain.enums import MarketRegime, ReasonCode, StructureTrend, Timeframe
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.market_models import (
@@ -48,8 +49,21 @@ def detect_regime(
     indicators: IndicatorSnapshot,
     levels: LevelSet,
     config: RegimeConfig,
+    calculation: CalculationConfig,
     strategy_version: str,
     prior: RegimeAssessment | None = None,
+) -> RegimeAssessment:
+    with calculation_context(calculation):
+        return _detect_regime(market, indicators, levels, config, strategy_version, prior)
+
+
+def _detect_regime(
+    market: MarketSnapshot,
+    indicators: IndicatorSnapshot,
+    levels: LevelSet,
+    config: RegimeConfig,
+    strategy_version: str,
+    prior: RegimeAssessment | None,
 ) -> RegimeAssessment:
     last_confirmed = _last_confirmed(prior, market.symbol, indicators.versions.config_version)
     scores = {
@@ -66,7 +80,17 @@ def detect_regime(
         levels.level_set_id,
         prior and prior.assessment_id,
     )
-    if not indicators.is_ready:
+    compatible_inputs = (
+        indicators.market_snapshot_id == market.snapshot_id
+        and indicators.symbol == market.symbol == levels.symbol
+        and indicators.as_of == market.as_of == levels.as_of
+        and indicators.versions.config_version == levels.config_version
+        and indicators.versions.data_version == market.data_version == levels.data_version
+    )
+    if not compatible_inputs or not indicators.is_ready:
+        reason = (
+            ReasonCode.VERSION_MISMATCH if not compatible_inputs else ReasonCode.INDICATOR_NOT_READY
+        )
         return RegimeAssessment(
             deterministic_id("regime-assessment", *identifier_parts),
             indicators.indicator_snapshot_id,
@@ -78,7 +102,7 @@ def detect_regime(
             ZERO,
             (),
             0,
-            (ReasonCode.INDICATOR_NOT_READY,),
+            (reason,),
             market.as_of,
             indicators.versions.config_version,
             strategy_version,

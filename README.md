@@ -9,7 +9,7 @@ an toàn không đủ rõ ràng.
 - PHASE 1 — **APPROVED**
 - PHASE 2 — Technical Specification: **COMPLETE**
 - PHASE 2 Design Gate — **APPROVED**
-- PHASE 3 — Project Scaffold + Core Domain Implementation: **COMPLETE (offline core)**
+- PHASE 3 — Deterministic Offline Core: **APPROVED after remediation**
 - Phạm vi thị trường dự kiến: `BTC-USDT-SWAP`, OKX Demo Trading
 - Live trading: **không thuộc phạm vi hiện tại và phải luôn mặc định tắt**
 - Repository có package Python chạy offline; không có mã kết nối hoặc gửi lệnh tới OKX.
@@ -40,6 +40,7 @@ an toàn không đủ rõ ràng.
 - Cài dependencies (Python 3.12+): `python -m pip install -e .[dev]`
 - Chạy test: `python -m pytest -q`
 - Chạy quality gates: `ruff check src tests`, `ruff format --check src tests`, `mypy src`
+- Python 3.12 CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
 PHASE 3 chỉ triển khai domain core, pipeline replay và SQLite journal local. OKX adapter,
 API key, network I/O, order submission, trading loop và live trading vẫn ngoài phạm vi.

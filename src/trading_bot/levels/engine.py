@@ -6,7 +6,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from trading_bot.config.models import LevelConfig
+from trading_bot.config.calculation import calculation_context
+from trading_bot.config.models import CalculationConfig, LevelConfig
 from trading_bot.domain.enums import (
     BreakoutDirection,
     BreakoutState,
@@ -20,7 +21,7 @@ from trading_bot.domain.enums import (
 )
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.market_models import Candle, Level, LevelSet, MarketSnapshot, RangeContext
-from trading_bot.domain.primitives import ONE, ZERO
+from trading_bot.domain.primitives import ONE
 from trading_bot.domain.value_objects import MarketStructure, StructurePoint
 
 
@@ -115,12 +116,32 @@ def _level(
     atr: Decimal,
     config: LevelConfig,
     as_of: datetime,
+    config_version: str,
+    data_version: str,
 ) -> Level:
-    price = sum((point.price for point in group), ZERO) / Decimal(len(group))
+    ordered_prices = sorted(point.price for point in group)
+    middle = len(ordered_prices) // 2
+    price = (
+        ordered_prices[middle]
+        if len(ordered_prices) % 2
+        else (ordered_prices[middle - 1] + ordered_prices[middle]) / Decimal(2)
+    )
     width = atr * config.zone_half_width_atr
     strength = min(ONE, Decimal(len(group)) / Decimal(config.full_strength_touches))
+    ordered_sources = tuple(
+        point.candle_id
+        for point in sorted(group, key=lambda point: (point.confirmed_at, point.candle_id))
+    )
     return Level(
-        deterministic_id("level", symbol, kind, tuple(point.candle_id for point in group), price),
+        deterministic_id(
+            "level",
+            symbol,
+            kind,
+            LevelMethod.SWING_CLUSTER,
+            ordered_sources,
+            config_version,
+            data_version,
+        ),
         symbol,
         kind,
         price,
@@ -130,10 +151,10 @@ def _level(
         LevelMethod.SWING_CLUSTER,
         min(point.time for point in group),
         max(point.confirmed_at for point in group),
-        max(point.time for point in group),
+        max(point.confirmed_at for point in group),
         as_of,
         len(group),
-        tuple(point.candle_id for point in group),
+        ordered_sources,
         None,
     )
 
@@ -152,7 +173,37 @@ def _location(position: Decimal, config: LevelConfig) -> RangeLocation:
 
 
 def build_level_set(
-    snapshot: MarketSnapshot, atr: Decimal, config: LevelConfig, config_version: str
+    snapshot: MarketSnapshot,
+    atr: Decimal,
+    config: LevelConfig,
+    calculation: CalculationConfig,
+    config_version: str,
+    prior_range: RangeContext | None = None,
+    *,
+    bullish_confirmation: bool = False,
+    bearish_confirmation: bool = False,
+) -> LevelSet:
+    with calculation_context(calculation):
+        return _build_level_set(
+            snapshot,
+            atr,
+            config,
+            config_version,
+            prior_range,
+            bullish_confirmation=bullish_confirmation,
+            bearish_confirmation=bearish_confirmation,
+        )
+
+
+def _build_level_set(
+    snapshot: MarketSnapshot,
+    atr: Decimal,
+    config: LevelConfig,
+    config_version: str,
+    prior_range: RangeContext | None,
+    *,
+    bullish_confirmation: bool,
+    bearish_confirmation: bool,
 ) -> LevelSet:
     source = snapshot.candles_15m[-config.lookback_bars[Timeframe.M15] :]
     points = detect_swings(source, config.swing_left_bars, config.swing_right_bars)
@@ -173,12 +224,30 @@ def build_level_set(
     )
     candidates = [
         *(
-            _level(group, LevelKind.SUPPORT, snapshot.symbol, atr, config, snapshot.as_of)
+            _level(
+                group,
+                LevelKind.SUPPORT,
+                snapshot.symbol,
+                atr,
+                config,
+                snapshot.as_of,
+                config_version,
+                snapshot.data_version,
+            )
             for group in _clusters(low_points, atr * config.level_merge_distance_atr)
             if len(group) >= config.minimum_touches
         ),
         *(
-            _level(group, LevelKind.RESISTANCE, snapshot.symbol, atr, config, snapshot.as_of)
+            _level(
+                group,
+                LevelKind.RESISTANCE,
+                snapshot.symbol,
+                atr,
+                config,
+                snapshot.as_of,
+                config_version,
+                snapshot.data_version,
+            )
             for group in _clusters(high_points, atr * config.level_merge_distance_atr)
             if len(group) >= config.minimum_touches
         ),
@@ -186,17 +255,32 @@ def build_level_set(
     active = [level for level in candidates if level.strength >= config.minimum_level_strength]
     close = snapshot.candles_15m[-1].close
     supports = tuple(
-        sorted((level for level in active if level.price < close), key=lambda item: item.price)
+        sorted(
+            (level for level in active if level.zone_lower <= close),
+            key=lambda item: (item.price, item.level_id),
+        )
     )
     resistances = tuple(
-        sorted((level for level in active if level.price > close), key=lambda item: item.price)
+        sorted(
+            (level for level in active if level.zone_upper >= close),
+            key=lambda item: (item.price, item.level_id),
+        )
     )
     range_context = None
     if supports and resistances:
         support, resistance = supports[-1], resistances[0]
         width = resistance.price - support.price
-        if width / atr >= config.minimum_range_width_atr:
+        if (
+            support.zone_upper < resistance.zone_lower
+            and width / atr >= config.minimum_range_width_atr
+        ):
             position = (close - support.price) / width
+            started_at = max(support.confirmed_at, resistance.confirmed_at)
+            last_validated_at = min(support.last_tested_at, resistance.last_tested_at)
+            age = max(
+                0,
+                int((snapshot.as_of - started_at) / timedelta(minutes=15)),
+            )
             range_context = RangeContext(
                 deterministic_id("range", support.level_id, resistance.level_id, config_version),
                 snapshot.symbol,
@@ -209,10 +293,10 @@ def build_level_set(
                 (support.price + resistance.price) / Decimal(2),
                 width / atr,
                 position,
-                min(support.first_observed_at, resistance.first_observed_at),
+                started_at,
+                last_validated_at,
                 snapshot.as_of,
-                snapshot.as_of,
-                0,
+                age,
                 support.test_count,
                 resistance.test_count,
                 0,
@@ -226,6 +310,31 @@ def build_level_set(
                 config_version,
                 snapshot.data_version,
             )
+            range_context = _carry_range_context(
+                range_context,
+                prior_range,
+                snapshot.candles_15m[-1],
+                atr,
+                config,
+                bullish_confirmation=bullish_confirmation,
+                bearish_confirmation=bearish_confirmation,
+            )
+    if (
+        range_context is None
+        and prior_range is not None
+        and prior_range.symbol == snapshot.symbol
+        and prior_range.config_version == config_version
+        and prior_range.data_version == snapshot.data_version
+        and prior_range.as_of < snapshot.as_of
+    ):
+        range_context = _advance_breakout(
+            prior_range,
+            snapshot.candles_15m[-1],
+            atr,
+            config,
+            bullish_confirmation=bullish_confirmation,
+            bearish_confirmation=bearish_confirmation,
+        )
     return LevelSet(
         deterministic_id("level-set", snapshot.snapshot_id, config_version),
         snapshot.snapshot_id,
@@ -241,7 +350,91 @@ def build_level_set(
     )
 
 
+def carry_range_context(
+    current: RangeContext,
+    prior: RangeContext | None,
+    candle: Candle,
+    atr: Decimal,
+    config: LevelConfig,
+    calculation: CalculationConfig,
+    *,
+    bullish_confirmation: bool = False,
+    bearish_confirmation: bool = False,
+) -> RangeContext:
+    with calculation_context(calculation):
+        return _carry_range_context(
+            current,
+            prior,
+            candle,
+            atr,
+            config,
+            bullish_confirmation=bullish_confirmation,
+            bearish_confirmation=bearish_confirmation,
+        )
+
+
+def _carry_range_context(
+    current: RangeContext,
+    prior: RangeContext | None,
+    candle: Candle,
+    atr: Decimal,
+    config: LevelConfig,
+    *,
+    bullish_confirmation: bool,
+    bearish_confirmation: bool,
+) -> RangeContext:
+    compatible = (
+        prior is not None
+        and prior.range_id == current.range_id
+        and prior.symbol == current.symbol
+        and prior.config_version == current.config_version
+        and prior.data_version == current.data_version
+    )
+    if not compatible or prior is None:
+        return current
+    if prior.as_of == current.as_of:
+        return prior
+    if prior.as_of > current.as_of:
+        return current
+    seed = replace(
+        prior,
+        support_tests=current.support_tests,
+        resistance_tests=current.resistance_tests,
+        last_validated_at=current.last_validated_at,
+        range_started_at=current.range_started_at,
+    )
+    return _advance_breakout(
+        seed,
+        candle,
+        atr,
+        config,
+        bullish_confirmation=bullish_confirmation,
+        bearish_confirmation=bearish_confirmation,
+    )
+
+
 def advance_breakout(
+    context: RangeContext,
+    candle: Candle,
+    atr: Decimal,
+    config: LevelConfig,
+    calculation: CalculationConfig,
+    *,
+    bullish_confirmation: bool = False,
+    bearish_confirmation: bool = False,
+) -> RangeContext:
+    with calculation_context(calculation):
+        return _advance_breakout(
+            context,
+            candle,
+            atr,
+            config,
+            bullish_confirmation=bullish_confirmation,
+            bearish_confirmation=bearish_confirmation,
+        )
+
+
+def _advance_breakout(
     context: RangeContext,
     candle: Candle,
     atr: Decimal,
@@ -267,7 +460,30 @@ def advance_breakout(
         context.breakout_detected_at,
         context.expires_at,
     )
-    if state is BreakoutState.NONE and (close > upper_detect or close < lower_detect):
+    reasons: tuple[ReasonCode, ...] = ()
+    stale_bars = int((now - context.last_validated_at) / timedelta(minutes=15))
+    if stale_bars > config.maximum_range_stale_bars:
+        return replace(
+            context,
+            reference_close=close,
+            position_in_range=(close - context.support) / context.range_width,
+            as_of=now,
+            range_age_bars=max(
+                context.range_age_bars,
+                int((now - context.range_started_at) / timedelta(minutes=15)),
+            ),
+            current_location=_location((close - context.support) / context.range_width, config),
+            reason_codes=(ReasonCode.RANGE_STALE,),
+        )
+    if state in {
+        BreakoutState.INVALIDATED,
+        BreakoutState.EXPIRED,
+        BreakoutState.RETEST_VALIDATED,
+    }:
+        state = BreakoutState.NONE
+        direction = None
+        count, detected, expires = 0, None, None
+    elif state is BreakoutState.NONE and (close > upper_detect or close < lower_detect):
         state = BreakoutState.BREAKOUT_DETECTED
         direction = BreakoutDirection.UP if close > upper_detect else BreakoutDirection.DOWN
         count, detected = 0, now
@@ -282,6 +498,7 @@ def advance_breakout(
         )
         if not held:
             state = BreakoutState.INVALIDATED
+            reasons = (ReasonCode.BREAKOUT_INVALIDATED,)
         else:
             count += 1
             if count >= config.breakout_confirmation_bars:
@@ -291,24 +508,34 @@ def advance_breakout(
         boundary = context.resistance if direction is BreakoutDirection.UP else context.support
         if expires is not None and now > expires:
             state = BreakoutState.EXPIRED
+            reasons = (ReasonCode.RETEST_EXPIRED,)
         else:
             tolerance = atr * config.retest_tolerance_atr
             if direction is BreakoutDirection.UP:
-                touched = candle.low <= boundary + tolerance
+                touched = boundary - tolerance <= candle.low <= boundary + tolerance
                 held = close >= boundary and bullish_confirmation
+                reclaimed = close < boundary
             else:
-                touched = candle.high >= boundary - tolerance
+                touched = boundary - tolerance <= candle.high <= boundary + tolerance
                 held = close <= boundary and bearish_confirmation
-            if touched:
+                reclaimed = close > boundary
+            if reclaimed:
+                state = BreakoutState.INVALIDATED
+                reasons = (ReasonCode.RETEST_INVALIDATED,)
+            elif touched:
                 state = BreakoutState.RETEST_VALIDATED if held else BreakoutState.INVALIDATED
+                if not held:
+                    reasons = (ReasonCode.RETEST_INVALIDATED,)
     position = (close - context.support) / context.range_width
     return replace(
         context,
         reference_close=close,
         position_in_range=position,
         as_of=now,
-        last_validated_at=now,
-        range_age_bars=context.range_age_bars + 1,
+        range_age_bars=max(
+            context.range_age_bars,
+            int((now - context.range_started_at) / timedelta(minutes=15)),
+        ),
         current_location=_location(position, config),
         breakout_state=state,
         breakout_direction=direction,
@@ -316,7 +543,5 @@ def advance_breakout(
         breakout_detected_at=detected,
         state_updated_at=now,
         expires_at=expires,
-        reason_codes=(ReasonCode.RANGE_STALE,)
-        if context.range_age_bars + 1 > config.maximum_range_stale_bars
-        else (),
+        reason_codes=reasons,
     )

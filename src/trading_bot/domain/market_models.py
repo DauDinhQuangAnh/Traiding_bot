@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 
 from trading_bot.domain.enums import (
     BreakoutDirection,
@@ -76,6 +77,14 @@ class Candle:
             raise DomainValidationError("close_time must be after open_time")
         if self.close_time - self.open_time != _INTERVALS[self.timeframe]:
             raise DomainValidationError("candle interval does not match timeframe")
+        if self.open_time.second != 0 or self.open_time.microsecond != 0:
+            raise DomainValidationError("candle interval is not aligned to a UTC boundary")
+        if self.timeframe is Timeframe.M5 and self.open_time.minute % 5 != 0:
+            raise DomainValidationError("M5 candle is not aligned to a UTC boundary")
+        if self.timeframe is Timeframe.M15 and self.open_time.minute % 15 != 0:
+            raise DomainValidationError("M15 candle is not aligned to a UTC boundary")
+        if self.timeframe is Timeframe.H1 and self.open_time.minute != 0:
+            raise DomainValidationError("H1 candle is not aligned to a UTC boundary")
         if self.high < max(self.open, self.close) or self.low > min(self.open, self.close):
             raise DomainValidationError("high/low must contain open and close")
         if self.high < self.low:
@@ -90,6 +99,13 @@ def validate_candle_series(
     if not candles:
         raise DomainValidationError(f"{timeframe.value} candle series must not be empty")
     expected_interval = _INTERVALS[timeframe]
+    canonical_keys = tuple(
+        (candle.source, candle.symbol, candle.timeframe, candle.open_time) for candle in candles
+    )
+    if len(set(canonical_keys)) != len(canonical_keys):
+        raise DomainValidationError("duplicate canonical candle key")
+    if any(current.open_time <= previous.open_time for previous, current in pairwise(candles)):
+        raise DomainValidationError("candle series must be strictly ordered")
     seen: set[tuple[str, str, Timeframe, datetime]] = set()
     previous: Candle | None = None
     for candle in candles:
@@ -137,8 +153,20 @@ class MarketSnapshot:
             raise DomainValidationError("last M15 candle must be the evaluation trigger")
         if self.candles_5m[-1].close_time != self.as_of:
             raise DomainValidationError("last M5 child must close with the M15 trigger")
-        if self.quote is not None and self.quote.symbol != self.symbol:
-            raise DomainValidationError("quote symbol mismatch")
+        trigger_open = self.candles_15m[-1].open_time
+        children = self.candles_5m[-3:]
+        if len(children) != 3 or tuple(candle.open_time for candle in children) != tuple(
+            trigger_open + timedelta(minutes=5 * index) for index in range(3)
+        ):
+            raise DomainValidationError("M15 trigger requires exactly aligned M5 children")
+        expected_h1_close = self.as_of.replace(minute=0, second=0, microsecond=0)
+        if self.candles_1h[-1].close_time != expected_h1_close:
+            raise DomainValidationError("latest H1 context is not the canonical closed interval")
+        if self.quote is not None:
+            if self.quote.symbol != self.symbol:
+                raise DomainValidationError("quote symbol mismatch")
+            if self.quote.event_time > self.as_of:
+                raise DomainValidationError("snapshot quote is from the future")
 
 
 @dataclass(frozen=True, slots=True)

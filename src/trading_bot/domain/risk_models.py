@@ -144,6 +144,8 @@ class RiskDecision:
     expires_at: datetime
     config_version: str
     state_version: str
+    instrument_version: str
+    cost_model_version: str
 
     def __post_init__(self) -> None:
         for name in (
@@ -152,6 +154,8 @@ class RiskDecision:
             "risk_context_id",
             "config_version",
             "state_version",
+            "instrument_version",
+            "cost_model_version",
         ):
             require_non_empty(getattr(self, name), name)
         require_utc(self.evaluated_at, "evaluated_at")
@@ -191,6 +195,7 @@ class ApprovedTradePlan:
     config_version: str
     state_version: str
     instrument_version: str
+    cost_model_version: str
 
     def __post_init__(self) -> None:
         for name in (
@@ -201,6 +206,7 @@ class ApprovedTradePlan:
             "config_version",
             "state_version",
             "instrument_version",
+            "cost_model_version",
         ):
             require_non_empty(getattr(self, name), name)
         validate_trade_geometry(self.side, self.entry_price, self.stop_price, self.targets)

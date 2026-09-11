@@ -36,8 +36,21 @@ def trade_id(candidate: str) -> str:
     return candidate
 
 
-def risk_decision_id(candidate: str, context: str, *versions: str) -> str:
-    return deterministic_id("risk-decision", candidate, context, versions)
+def risk_decision_id(
+    candidate: str,
+    context: str,
+    state_version: str,
+    config_version: str,
+    instrument_version: str,
+) -> str:
+    return deterministic_id(
+        "risk-decision",
+        candidate,
+        context,
+        state_version,
+        config_version,
+        instrument_version,
+    )
 
 
 def risk_approval_id(decision: str) -> str:
