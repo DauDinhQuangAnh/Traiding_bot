@@ -203,7 +203,12 @@ def engine_inputs(
         HISTORICAL_VERSIONS,
     )
     instrument = metadata(start)
-    execution_version = execution_model_version(configured.backtest)
+    execution_version = execution_model_version(
+        configured.backtest,
+        configured.execution,
+        configured.risk,
+        configured.calculation,
+    )
     identifier = run_id(
         versions,
         HISTORICAL_VERSIONS,

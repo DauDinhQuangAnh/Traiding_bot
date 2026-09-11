@@ -4,25 +4,40 @@
 
 `NEEDS_WORK`
 
-The implementation and local gates are complete, but this document does not
-auto-approve PHASE 5. Python 3.12 GitHub Actions has not yet run for the final PHASE 5
-commit, and explicit human review is still required. PHASE 4 remains the last approved
-phase.
+The original PHASE 5 baseline and its Python 3.12 workflow passed, and the four required
+remediations now pass all local gates. This document does not auto-approve PHASE 5:
+Python 3.12 GitHub Actions has not yet run for the remediation commit, and explicit human
+review is still required. PHASE 4 remains the last approved phase.
 
 ## Evidence baseline
 
 - Approved PHASE 4 inputs: baseline `635303d`, identity remediation `68bedeb`.
 - PHASE 5 plan/reconciliation commit: `0847af3`.
 - PHASE 5 implementation baseline: `5cd8a52`.
+- PHASE 5 acceptance-evidence baseline: `deb6d2d`; GitHub Actions Python 3.12 PASS.
 - Local interpreter: Python 3.11.9 at `D:\hoctap\python\python.exe`.
-- Local gate result before final commit: 155 tests passed with 85% total branch-aware
-  coverage. Critical PHASE 5 modules: engine 81%, execution 96%, portfolio 87%,
-  metrics 100%, models 92%, reports 100%, and versions 100%.
+- Remediation local gate result before commit: 180 tests passed with 85% total
+  branch-aware coverage. Critical PHASE 5 modules: engine 81%, execution 92%, portfolio
+  88%, metrics 100%, models 92%, reports 100%, and versions 100%.
 - Critical implementation: `src/trading_bot/backtest/`,
   `src/trading_bot/application/backtest_pipeline.py`, and
   `src/trading_bot/infrastructure/sqlite_backtest.py`.
 - Focused evidence: `tests/backtest/` and
   `tests/integration/test_backtest_pipeline.py`.
+
+## Remediation evidence
+
+| Finding | Status | Evidence |
+|---|---|---|
+| Funding ordering and intrabar look-ahead | PASS locally | M5-open-only validation; open-price mark; strict pre-existing-position eligibility; funding-before-exit tie-break; LONG/SHORT positive/negative sign regressions. |
+| Last-mile execution validation | PASS locally | Typed `EntryExecutionResult`; terminal expiry/rejection; actual-price geometry, stop, net-RR, worst-loss, risk-budget, exposure, leverage, margin and slippage gates; structured audit payload; no Risk Engine recall or resizing. |
+| Catastrophic gap / negative equity | PASS locally | Negative equity and closed loss retained; typed `ECONOMIC_HALT` / `EQUITY_DEPLETED`; no later entry; deterministic `HALTED`; structured no-liquidation warning; SQLite persistence regression. |
+| Exposure denominator | PASS locally | Bar-close marking is separated from no-count revaluation; exact 5/10 exposure and no-position denominator regressions. |
+| Event chronology | PASS locally | Runtime append guard plus `BacktestResult` monotonic-time invariant; sequence tie-break for equal timestamp. |
+| Execution identity | PASS locally | Version includes explicit last-mile semantics, deviation/risk/cap inputs, funding-buffer count and Decimal policy; identity-change regressions. |
+
+Remediation CI status is `PENDING`: local results cannot substitute for a Python 3.12
+workflow on the exact remediation commit.
 
 ## Acceptance criteria
 
@@ -47,7 +62,7 @@ phase.
 | 17 | Spread explicitly modeled | PASS | Symmetric quote model, structured warning, configured Decimal rate, and positive attribution assertion. |
 | 18 | Slippage explicitly modeled | PASS | Separate market/stop rates, adverse formulas, structured warning, and execution assertions. |
 | 19 | Fees use executed notional | PASS | Fill invariant asserts `fee == fill.notional * taker_fee_rate`; entry-only/exit-only accounting cases exist. |
-| 20 | Funding typed and auditable | PASS | DISABLED/FIXED/HISTORICAL providers, signed `FundingCashFlow`, missing-series failure, and open-LONG golden. |
+| 20 | Funding typed and auditable | PASS locally after remediation | DISABLED/FIXED/HISTORICAL providers; M5-open mark and ownership cutoff; signed LONG/SHORT positive/negative regressions; missing/misaligned series fail closed. |
 | 21 | Costs not double-counted | PASS | Net reconciliation excludes attribution estimates; positive-cost versus zero-cost final-equity property. |
 | 22 | Portfolio accounting deterministic | PASS | Decimal-only incremental ledger, reconciliation validators, exact accounting and canonical-repeat tests. |
 | 23 | Open-position mark-to-market included | PASS | M5 side-adverse marks populate `unrealized_pnl`; every point validates `equity=cash+unrealized`. |
@@ -58,9 +73,9 @@ phase.
 | 28 | No martingale/pyramiding | PASS | One-position portfolio invariant; Risk Engine sizing remains unchanged; no scaling path exists. |
 | 29 | Metadata injected/versioned | PASS | Metadata is a required run input, included in run identity, validated before execution, and used for all contract math. |
 | 30 | No invented OKX semantics | PASS | Only injected linear fixture metadata is supported; liquidation is explicitly not implemented. |
-| 31 | Deterministic run identity | PASS | Run ID is content-derived and identity-change tests cover strategy/data/execution/cost inputs. |
+| 31 | Deterministic run identity | PASS locally after remediation | Run ID is content-derived and identity-change tests cover strategy/data/execution/cost and last-mile inputs. |
 | 32 | Deterministic cost identity | PASS | Hash covers all rates and funding assumptions; changed slippage changes ID. |
-| 33 | Deterministic execution identity | PASS | Hash covers clock/fill/ambiguity/gap/end policies; policy change test changes ID. |
+| 33 | Deterministic execution identity | PASS locally after remediation | Hash covers clock/fill/ambiguity/gap/end policies plus last-mile validation and Decimal assumptions; configuration changes alter ID. |
 | 34 | Per-timeframe historical versions recorded | PASS | `HistoricalVersionSet` is embedded in `BacktestRunSpec` and report. |
 | 35 | Snapshot composite recorded | PASS | Run `VersionSet.data_version` must equal the M5/M15/H1 composite or construction fails. |
 | 36 | Repeat complete run is canonical-identical | PASS | Repeated run asserts byte-equivalent `canonical_json` including all artifacts. |
@@ -84,7 +99,7 @@ phase.
 | 54 | No AI integration | PASS | No AI dependency or runtime path added. |
 | 55 | No OKX/network client | PASS | Backtest consumes local repository ports only; no exchange SDK, credential, or network code added. |
 | 56 | Existing PHASE 1–4 tests pass | PASS | Full local pytest suite passes without skipped/disabled legacy tests. |
-| 57 | Python 3.12 CI passes final commit | NEEDS_WORK | Final PHASE 5 commit has not yet been pushed; remote GitHub Actions evidence is unavailable. |
+| 57 | Python 3.12 CI passes final commit | NEEDS_WORK | `deb6d2d` passed, but the exact remediation commit has not been pushed and has no remote Python 3.12 evidence. |
 | 58 | Ruff passes | PASS | `ruff check src tests` and `ruff format --check src tests` pass locally. |
 | 59 | Mypy passes | PASS | Strict `mypy src` passes locally. |
 | 60 | `docs/backtesting.md` complete | PASS | All 26 required sections are present. |
@@ -102,7 +117,7 @@ phase.
 | F — high cost destroys edge | PASS | Positive-cost final equity is not greater than zero-cost final equity. |
 | G — daily loss halt | PASS | Loss reaches the configured gate; next M15 candidate receives HALT and no new order. |
 | H — consecutive loss gate | PASS | Persisted loss count causes configured Risk HALT. |
-| I — funding | PASS | LONG held over positive fixed funding gets one negative cash flow. |
+| I — funding | PASS locally after remediation | Boundary uses M5 open, strict ownership cutoff and funding-before-exit ordering; all side/rate signs are covered. |
 | J — reproducibility | PASS | Complete repeat plus rebuilt SQLite artifacts are canonical byte-identical. |
 
 ## Execution and safety conclusion
@@ -114,8 +129,8 @@ backtest output.
 
 ## Required external review
 
-1. Commit the final PHASE 5 implementation and evidence locally.
+1. Commit the PHASE 5 remediation and evidence locally.
 2. Push once when explicitly requested or when the agreed batch is ready.
-3. Require GitHub Actions Python 3.12 to pass that exact commit.
+3. Require GitHub Actions Python 3.12 to pass that exact remediation commit.
 4. Obtain explicit human review before changing PHASE 5 to `APPROVED` or starting
    PHASE 6.

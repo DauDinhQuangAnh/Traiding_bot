@@ -29,15 +29,17 @@ Closed M5 candles are the execution clock. For each M5 event, ordering is fixed:
 
 1. Reset a configured daily session when its calendar boundary is crossed.
 2. Expire or fill the previously approved pending entry at the M5 open.
-3. Resolve stop/target touches, including an optional same-entry-bar exit.
-4. Apply funding events in `[bar.open_time, bar.close_time)` to any still-open position.
+3. Apply an M5-open-aligned funding event using the M5 open as its mark, but only to a
+   position whose entry time is strictly earlier than the funding timestamp.
+4. Resolve stop/target touches, including an optional same-entry-bar exit.
 5. Mark the portfolio at the M5 close using the side-adverse modeled quote.
 6. Evaluate an M15 strategy result whose `as_of` equals that close.
 7. Ask the Risk Engine for REJECT, HALT, or an `ApprovedTradePlan`.
 8. Journal all outcomes in deterministic sequence order.
 
 Inputs must be unique and strictly time ordered. M15 evaluations must be UTC, in range,
-and aligned to a 15-minute close boundary.
+and aligned to a 15-minute close boundary. Journal `event_time` is monotonic; sequence
+is the deterministic tie-break when multiple events share a timestamp.
 
 ## 4. Signal timing
 
@@ -61,7 +63,13 @@ event is the M5 bar opening at `T`.
 The approved `CLOSE_REFERENCE` entry model is simulated as market-like execution at the
 next eligible M5 open. LONG buys at modeled ask plus adverse slippage; SHORT sells at
 modeled bid minus adverse slippage. The order must reference an unexpired
-`ApprovedTradePlan`; an unapproved candidate cannot create an order or fill.
+`ApprovedTradePlan`; an unapproved candidate cannot create an order or fill. Immediately
+before opening a position, the simulator revalidates the actual fill without calling the
+Risk Engine again or resizing: price deviation, side geometry, stop invariants, net RR,
+worst-case loss versus the approved risk budget, notional/exposure/leverage, margin, and
+maximum slippage must all remain valid. Rejection is terminal and journals the approved
+entry, actual entry, deviation, actual RR, actual worst loss, budget, capacities, and
+reason codes. Any entry model other than `CLOSE_REFERENCE` fails closed.
 
 ## 7. Stop execution
 
@@ -127,7 +135,10 @@ non-negative and charged once per fill.
 
 Positive rates debit LONG and credit SHORT; negative rates reverse that direction.
 Funding uses the remaining position notional at the event mark and is recorded as an
-individual cash-flow artifact.
+individual cash-flow artifact. PHASE 5 supports funding only when its timestamp equals
+an M5 open; an event strictly inside a bar fails validation. The boundary mark is
+`bar.open`, never close/high/low. An entry at the exact funding timestamp is not charged;
+a pre-existing position exiting at that timestamp is charged before its exit is resolved.
 
 ## 15. Instrument metadata
 
@@ -158,14 +169,20 @@ equity               = cash + unrealized PnL
 Spread and slippage already affect fill prices. Their analytics fields are not extra
 cash debits. Remaining quantity, target allocations, fees, margin, and equity have
 explicit non-negative/finite invariants where applicable. A fully closed trade is
-emitted exactly once.
+emitted exactly once. A catastrophic gap may legitimately make cash and equity negative.
+Because liquidation is not modeled, that outcome is retained, emits an `ECONOMIC_HALT`
+with `EQUITY_DEPLETED`, blocks future entries, and ends deterministically as `HALTED`
+rather than being converted into an input-validation failure or clamped to zero.
 
 ## 18. Equity curve
 
-Equity is marked once per processed M5 close, plus a final point after a forced close.
+Equity is marked once per processed M5 close, plus a final revaluation point after a
+forced close.
 An open LONG is marked at modeled bid and an open SHORT at modeled ask. Used margin is
 current notional divided by approved leverage; available margin is conservatively
-floored at zero. Exposure is measured as marked M5 bars with an open position.
+floored at zero. Exposure is measured as marked M5 bars with an open position. The final
+forced-close revaluation does not increment the M5-bar denominator, so a 10-bar run
+exposed for five closes reports exactly `0.5`.
 
 ## 19. Drawdown
 
@@ -193,7 +210,9 @@ side, regime, or setup and never feed results back into strategy parameters.
 
 `backtest_run_id` hashes code, strategy, app-config, M5/M15/H1 and snapshot-composite
 versions, instrument metadata, execution model, cost model, funding model, explicit UTC
-range, and initial equity. Execution identity hashes timing and ambiguity policies.
+range, and initial equity. Execution identity hashes timing and ambiguity policies,
+the last-mile validation version, deviation tolerance, relevant risk caps/invariants,
+funding-buffer interval count, and Decimal calculation policy.
 Cost identity hashes spread, slippage, fees, funding mode/rate/interval, and provider
 version. Host paths, wall clock, UUIDs, and database location are excluded.
 
@@ -224,6 +243,10 @@ SQLite database must preserve the same stored bytes.
 - End-of-run open positions are forcibly closed at the last available M5 close using
   modeled spread, slippage, and fee.
 - No production dataset is committed and no live-execution evidence exists.
+- Funding observations not aligned to an M5 open are rejected; no intrabar ownership
+  ordering is invented.
+- Negative equity is reported without a liquidation-price or bankruptcy-fill model and
+  therefore carries a structured warning.
 - Technical reproducibility does not establish an economic edge.
 
 ## 26. Acceptance criteria

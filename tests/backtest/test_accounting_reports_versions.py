@@ -62,7 +62,20 @@ def test_entry_only_and_exit_only_fee_accounting(app_config):
         plan = approved_plan(trade, START)
         entry_bar = candle(START, "100", "101", "99", "100")
         order = create_entry_order(trade, plan, START)
-        _, entry = try_fill_entry(order, entry_bar, instrument, configured.backtest)
+        _, entry = try_fill_entry(
+            order,
+            trade,
+            plan,
+            entry_bar,
+            instrument,
+            configured.backtest,
+            configured.execution,
+            configured.risk,
+            trade.cost_rate_estimate,
+            current_notional=D("0"),
+            available_margin=D("10000"),
+            account_equity=D("10000"),
+        )
         assert entry is not None
         entry = replace(entry, fee=entry_fee)
         portfolio = BacktestPortfolio(D("10000"), START, instrument, "UTC")
@@ -101,9 +114,14 @@ def test_cost_execution_and_run_versions_change_with_semantic_inputs(app_config)
     )
     assert changed_cost != base_cost
 
-    base_execution = execution_model_version(base)
+    base_execution = execution_model_version(
+        base, app_config.execution, app_config.risk, app_config.calculation
+    )
     changed_execution = execution_model_version(
-        replace(base, allow_same_bar_exit_after_entry=not base.allow_same_bar_exit_after_entry)
+        replace(base, allow_same_bar_exit_after_entry=not base.allow_same_bar_exit_after_entry),
+        app_config.execution,
+        app_config.risk,
+        app_config.calculation,
     )
     assert changed_execution != base_execution
 

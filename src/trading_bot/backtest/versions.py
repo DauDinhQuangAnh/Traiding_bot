@@ -6,16 +6,26 @@ from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 
-from trading_bot.config.models import BacktestConfig
+from trading_bot.config.models import (
+    BacktestConfig,
+    CalculationConfig,
+    ExecutionConfig,
+    RiskConfig,
+)
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.risk_models import InstrumentMetadata
 from trading_bot.domain.value_objects import VersionSet
 from trading_bot.historical.models import HistoricalVersionSet
 
 
-def execution_model_version(config: BacktestConfig) -> str:
+def execution_model_version(
+    config: BacktestConfig,
+    execution: ExecutionConfig,
+    risk: RiskConfig,
+    calculation: CalculationConfig,
+) -> str:
     return deterministic_id(
-        "backtest-execution-model-v1",
+        "backtest-execution-model-v2-last-mile-validation",
         config.execution_model_version,
         config.execution_timeframe,
         config.entry_fill_policy,
@@ -26,6 +36,22 @@ def execution_model_version(config: BacktestConfig) -> str:
         config.limit_fill_policy,
         config.end_position_policy,
         config.halt_stops_run,
+        execution.price_deviation_tolerance,
+        risk.minimum_rr,
+        risk.max_slippage,
+        risk.stop_min_distance_atr,
+        risk.stop_max_distance_atr,
+        risk.stop_minimum_tick_multiple,
+        risk.stop_minimum_spread_multiple,
+        risk.max_position_notional,
+        risk.max_total_exposure,
+        risk.max_leverage,
+        risk.margin_buffer_ratio,
+        risk.funding_buffer_intervals,
+        calculation.decimal_precision,
+        calculation.rounding_mode,
+        "approved-quantity-no-resize",
+        "actual-fill-worst-loss-v1",
     )
 
 

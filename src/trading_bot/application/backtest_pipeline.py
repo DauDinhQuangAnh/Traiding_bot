@@ -106,7 +106,9 @@ def run_historical_backtest(
     if config.backtest.funding_mode is FundingMode.HISTORICAL_SERIES and funding_provider is None:
         raise DomainValidationError("historical funding mode requires an injected provider")
     provider.validate_range(start_time, end_time)
-    execution_version = execution_model_version(config.backtest)
+    execution_version = execution_model_version(
+        config.backtest, config.execution, config.risk, config.calculation
+    )
     cost_version = cost_model_version(config.backtest, provider.model_version)
     funding_debit_rate = provider.maximum_debit_rate * config.risk.funding_buffer_intervals
     costs = risk_cost_rates(config.backtest, cost_version, funding_debit_rate)

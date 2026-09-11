@@ -24,6 +24,23 @@ def _zero_rates() -> CostRateEstimate:
     return CostRateEstimate(*(D("0") for _ in range(7)), model_version="zero-cost")
 
 
+def _attempt(order, trade, plan, bar, instrument, config):
+    return try_fill_entry(
+        order,
+        trade,
+        plan,
+        bar,
+        instrument,
+        config.backtest,
+        config.execution,
+        config.risk,
+        trade.cost_rate_estimate,
+        current_notional=D("0"),
+        available_margin=config.backtest.initial_equity,
+        account_equity=config.backtest.initial_equity,
+    )
+
+
 def test_long_and_short_market_fills_are_adverse_and_fee_uses_executed_notional(app_config):
     _, config, instrument, _, _ = engine_inputs(app_config, START, START + timedelta(minutes=10))
     spec, _, _, _, _ = engine_inputs(app_config, START, START + timedelta(minutes=10))
@@ -32,7 +49,7 @@ def test_long_and_short_market_fills_are_adverse_and_fee_uses_executed_notional(
         trade = candidate(START, spec.versions, _zero_rates(), side=side)
         plan = approved_plan(trade, START)
         order = create_entry_order(trade, plan, START)
-        filled, execution = try_fill_entry(order, bar, instrument, config.backtest)
+        filled, execution = _attempt(order, trade, plan, bar, instrument, config)
         assert execution is not None and filled.status is OrderStatus.FILLED
         quote = modeled_quote(trade.symbol, bar.open, bar.open_time, config.backtest)
         if side is TradeSide.LONG:
@@ -53,19 +70,19 @@ def test_entry_never_fills_before_decision_and_limit_needs_future_touch(app_conf
     plan = approved_plan(trade, decision_time)
     market = create_entry_order(trade, plan, decision_time)
     historical = candle(START, "100", "120", "80", "100")
-    unchanged, fill = try_fill_entry(market, historical, instrument, config.backtest)
+    unchanged, fill = _attempt(market, trade, plan, historical, instrument, config)
     assert unchanged == market and fill is None
 
     limit = create_entry_order(
-        trade, plan, decision_time, order_type=OrderType.LIMIT, limit_price=D("99")
+        trade, plan, decision_time, order_type=OrderType.LIMIT, limit_price=D("99.9")
     )
     untouched = candle(decision_time, "101", "102", "100", "101")
-    still_pending, fill = try_fill_entry(limit, untouched, instrument, config.backtest)
+    still_pending, fill = _attempt(limit, trade, plan, untouched, instrument, config)
     assert still_pending.status is OrderStatus.INTENT_CREATED and fill is None
-    touched = candle(decision_time + timedelta(minutes=5), "101", "102", "98", "100")
-    completed, fill = try_fill_entry(still_pending, touched, instrument, config.backtest)
+    touched = candle(decision_time + timedelta(minutes=5), "101", "102", "99.8", "100")
+    completed, fill = _attempt(still_pending, trade, plan, touched, instrument, config)
     assert completed.status is OrderStatus.FILLED
-    assert fill is not None and fill.fill_price == D("99")
+    assert fill is not None and fill.fill_price == D("99.9")
 
     with pytest.raises(DomainValidationError, match="timing"):
         create_entry_order(trade, plan, decision_time - timedelta(minutes=5))
@@ -79,7 +96,7 @@ def test_expired_approval_does_not_fill(app_config):
     plan = replace(approved_plan(trade, START), expires_at=START + timedelta(seconds=30))
     order = create_entry_order(trade, plan, START)
     later = candle(START + timedelta(minutes=5), "100", "101", "99", "100")
-    expired, fill = try_fill_entry(order, later, instrument, config.backtest)
+    expired, fill = _attempt(order, trade, plan, later, instrument, config)
     assert expired.status is OrderStatus.EXPIRED and fill is None
 
 
@@ -167,8 +184,9 @@ def test_filled_approval_is_one_shot(app_config):
     trade = candidate(START, spec.versions, costs)
     order = create_entry_order(trade, approved_plan(trade, START), START)
     bar = candle(START, "100", "101", "99", "100")
-    filled, first = try_fill_entry(order, bar, instrument, config.backtest)
-    unchanged, duplicate = try_fill_entry(filled, bar, instrument, config.backtest)
+    plan = approved_plan(trade, START)
+    filled, first = _attempt(order, trade, plan, bar, instrument, config)
+    unchanged, duplicate = _attempt(filled, trade, plan, bar, instrument, config)
     assert first is not None
     assert unchanged == filled
     assert duplicate is None

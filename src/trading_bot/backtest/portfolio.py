@@ -181,7 +181,7 @@ class BacktestPortfolio:
     def apply_funding(
         self, event: FundingRateEvent, mark_price: Decimal, model_version: str
     ) -> FundingCashFlow | None:
-        if self.position is None:
+        if self.position is None or self.position.entry_fill.event_time >= event.timestamp:
             return None
         notional = self.metadata.notional(self.position.remaining_quantity, mark_price)
         cash_flow = funding_cash_flow(self.position.plan.side, notional, event.rate)
@@ -207,10 +207,24 @@ class BacktestPortfolio:
         self.total_funding += cash_flow
         return record
 
+    def mark_bar_close(self, mark_price: Decimal, timestamp: datetime) -> EquityPoint:
+        """Record one clock-bar close and include it in exposure statistics."""
+        return self._mark(mark_price, timestamp, count_bar=True)
+
+    def revalue(self, mark_price: Decimal, timestamp: datetime) -> EquityPoint:
+        """Revalue portfolio state without creating another clock-bar observation."""
+        return self._mark(mark_price, timestamp, count_bar=False)
+
     def mark(self, mark_price: Decimal, timestamp: datetime) -> EquityPoint:
-        self.total_bars += 1
+        """Backward-compatible alias for a clock-bar close mark."""
+        return self.mark_bar_close(mark_price, timestamp)
+
+    def _mark(self, mark_price: Decimal, timestamp: datetime, *, count_bar: bool) -> EquityPoint:
+        if count_bar:
+            self.total_bars += 1
         if self.position is not None:
-            self.exposure_bars += 1
+            if count_bar:
+                self.exposure_bars += 1
             base_quantity = self.metadata.base_quantity(self.position.remaining_quantity)
             if self.position.plan.side is TradeSide.LONG:
                 self.unrealized_pnl = (

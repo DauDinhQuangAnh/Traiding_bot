@@ -428,3 +428,8 @@ class BacktestResult:
             raise DomainValidationError("event belongs to another backtest run")
         if tuple(event.sequence for event in self.events) != tuple(range(len(self.events))):
             raise DomainValidationError("backtest event sequence must be contiguous")
+        if any(
+            current.event_time < previous.event_time
+            for previous, current in zip(self.events, self.events[1:], strict=False)
+        ):
+            raise DomainValidationError("backtest event time must be monotonic")

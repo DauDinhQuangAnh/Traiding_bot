@@ -77,6 +77,7 @@ class BacktestEngine:
         self._candidates: dict[str, TradeCandidate] = {}
         self._plans: dict[str, ApprovedTradePlan] = {}
         self._halted = False
+        self._equity_depleted = False
         self._counts = {
             "evaluations": 0,
             "no_trade": 0,
@@ -109,23 +110,35 @@ class BacktestEngine:
             if portfolio.reset_session_if_needed(bar.open_time):
                 self._event(BacktestEventType.SESSION_RESET, bar.open_time, {})
             entered = self._process_pending(bar, portfolio)
-            if portfolio.position is not None and (
-                not entered or self.config.backtest.allow_same_bar_exit_after_entry
+            rate_events = self.funding_provider.rates_between(bar.open_time, bar.close_time)
+            if any(event.timestamp != bar.open_time for event in rate_events):
+                raise DomainValidationError("funding events must align exactly to an M5 bar open")
+            if tuple(event.timestamp for event in rate_events) != tuple(
+                sorted({event.timestamp for event in rate_events})
             ):
-                self._process_position(bar, portfolio)
-            for rate_event in self.funding_provider.rates_between(bar.open_time, bar.close_time):
+                raise DomainValidationError("funding events must be unique and ordered")
+            for rate_event in rate_events:
                 record = portfolio.apply_funding(
-                    rate_event, bar.close, self.funding_provider.model_version
+                    rate_event, bar.open, self.funding_provider.model_version
                 )
                 if record is not None:
                     self._funding.append(record)
                     self._event(
                         BacktestEventType.FUNDING_APPLIED,
                         rate_event.timestamp,
-                        {"funding_id": record.funding_id, "cash_flow": record.cash_flow},
+                        {
+                            "funding_id": record.funding_id,
+                            "cash_flow": record.cash_flow,
+                            "mark_price": bar.open,
+                        },
                     )
+            if portfolio.position is not None and (
+                not entered or self.config.backtest.allow_same_bar_exit_after_entry
+            ):
+                self._process_position(bar, portfolio)
             mark_price = self._mark_price(bar.close, bar.close_time, portfolio)
-            self._equity.append(portfolio.mark(mark_price, bar.close_time))
+            self._equity.append(portfolio.mark_bar_close(mark_price, bar.close_time))
+            self._halt_if_equity_depleted(portfolio, bar.close_time)
             evaluation = evaluation_by_time.get(bar.close_time)
             if evaluation is not None and not self._halted:
                 self._evaluate(evaluation, bar, portfolio)
@@ -154,7 +167,8 @@ class BacktestEngine:
                 fill.event_time,
                 {"trade_id": trade.trade_id, "exit_reason": trade.exit_reason},
             )
-            self._equity.append(portfolio.mark(final_bar.close, final_bar.close_time))
+            self._equity.append(portfolio.revalue(final_bar.close, final_bar.close_time))
+            self._halt_if_equity_depleted(portfolio, final_bar.close_time)
         if self._pending is not None:
             self._pending = replace(self._pending, status=OrderStatus.EXPIRED)
             self._replace_order(self._pending)
@@ -196,6 +210,8 @@ class BacktestEngine:
         ]
         if self.funding_provider.mode is FundingMode.DISABLED:
             warnings.append(BacktestWarning.FUNDING_DISABLED)
+        if self._equity_depleted:
+            warnings.append(BacktestWarning.NEGATIVE_EQUITY_WITHOUT_LIQUIDATION_MODEL)
         run = BacktestRun(
             self.spec,
             status,
@@ -217,7 +233,24 @@ class BacktestEngine:
     def _process_pending(self, bar: Candle, portfolio: BacktestPortfolio) -> bool:
         if self._pending is None:
             return False
-        updated, fill = try_fill_entry(self._pending, bar, self.metadata, self.config.backtest)
+        candidate = self._candidates[self._pending.candidate_id]
+        plan = self._plans[self._pending.approved_plan_id]
+        outcome = try_fill_entry(
+            self._pending,
+            candidate,
+            plan,
+            bar,
+            self.metadata,
+            self.config.backtest,
+            self.config.execution,
+            self.config.risk,
+            self.costs,
+            current_notional=portfolio.current_notional(bar.open),
+            available_margin=max(Decimal("0"), portfolio.equity - portfolio.used_margin(bar.open)),
+            account_equity=portfolio.equity,
+        )
+        updated = outcome.order
+        fill = outcome.fill
         self._pending = updated
         self._replace_order(updated)
         if updated.status is OrderStatus.EXPIRED:
@@ -226,13 +259,25 @@ class BacktestEngine:
                 BacktestEventType.ORDER_EXPIRED,
                 bar.open_time,
                 {"order_id": updated.order_id},
+                outcome.reason_codes,
+            )
+            self._pending = None
+            return False
+        if updated.status is OrderStatus.REJECTED:
+            self._event(
+                BacktestEventType.ORDER_REJECTED,
+                bar.open_time,
+                {
+                    "order_id": updated.order_id,
+                    **dict(outcome.calculations),
+                    "reason_codes": tuple(code.value for code in outcome.reason_codes),
+                },
+                outcome.reason_codes,
             )
             self._pending = None
             return False
         if fill is None:
             return False
-        candidate = self._candidates[updated.candidate_id]
-        plan = self._plans[updated.approved_plan_id]
         self._fills.append(fill)
         portfolio.open(candidate, plan, fill)
         self._event(
@@ -384,6 +429,23 @@ class BacktestEngine:
         quote = modeled_quote(self.spec.symbol, close, timestamp, self.config.backtest)
         return quote.bid if portfolio.position.plan.side is TradeSide.LONG else quote.ask
 
+    def _halt_if_equity_depleted(self, portfolio: BacktestPortfolio, event_time: datetime) -> None:
+        if portfolio.equity > Decimal("0") or self._equity_depleted:
+            return
+        self._equity_depleted = True
+        self._halted = True
+        self._event(
+            BacktestEventType.ECONOMIC_HALT,
+            event_time,
+            {
+                "cash": portfolio.cash,
+                "equity": portfolio.equity,
+                "liquidation_model": "NOT_IMPLEMENTED",
+                "reason_codes": (ReasonCode.EQUITY_DEPLETED.value,),
+            },
+            (ReasonCode.EQUITY_DEPLETED,),
+        )
+
     def _replace_order(self, updated: BacktestOrderState) -> None:
         for index, order in enumerate(self._orders):
             if order.order_id == updated.order_id:
@@ -398,6 +460,8 @@ class BacktestEngine:
         payload: dict[str, object],
         reason_codes: tuple[ReasonCode, ...] = (),
     ) -> None:
+        if self._events and event_time < self._events[-1].event_time:
+            raise DomainValidationError("backtest event time cannot decrease")
         sequence = len(self._events)
         identifier = deterministic_id(
             "backtest-event-v1",
@@ -439,7 +503,12 @@ class BacktestEngine:
             raise DomainValidationError("funding model version mismatch")
         if self.funding_provider.mode is not self.config.backtest.funding_mode:
             raise DomainValidationError("funding mode mismatch")
-        if self.spec.execution_model_version != execution_model_version(self.config.backtest):
+        if self.spec.execution_model_version != execution_model_version(
+            self.config.backtest,
+            self.config.execution,
+            self.config.risk,
+            self.config.calculation,
+        ):
             raise DomainValidationError("execution model version mismatch")
         if self.spec.cost_model_version != cost_model_version(
             self.config.backtest, self.funding_provider.model_version

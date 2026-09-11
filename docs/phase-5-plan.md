@@ -38,10 +38,11 @@ not import SQLite or any network adapter. Strategy remains unaware of fills/acco
 ## 4. Event clock
 
 M5 is the only execution clock. Bars are strictly ordered by `(close_time, open_time,
-candle_id)`. For each M5 bar the engine: expires/processes pre-existing entries,
-activates protection on fill, resolves stop/targets, applies funding, marks equity at
-close, updates risk state, evaluates a newly closed M15 interval, then appends audit
-records. Collection ordering is explicit and never depends on mapping iteration.
+candle_id)`. For each M5 bar the engine: expires/processes pre-existing entries at open,
+applies an open-aligned funding event only to positions owned strictly before that
+timestamp, resolves stop/targets, marks equity at close, updates risk state, evaluates a
+newly closed M15 interval, then appends audit records. Event time never decreases and
+sequence is the tie-break for equal timestamps.
 
 ## 5. Market evaluation timing
 
@@ -60,6 +61,11 @@ approved plans that explicitly request it: future touch is required and MVP uses
 labelled deterministic full fill. Pending orders have deterministic IDs, one-shot
 approval use, creation/eligibility/expiry timestamps, and cannot exist without an
 unexpired `ApprovedTradePlan`.
+
+Before any actual fill opens a position, last-mile validation rechecks price deviation,
+geometry, stop invariants, cost-aware RR and worst loss, approved risk budget, exposure,
+leverage, margin, and slippage. Failure rejects the order permanently without resizing,
+calling the Risk Engine again, or creating a replacement plan.
 
 ## 7. Intrabar ambiguity policy
 
@@ -83,7 +89,9 @@ A `FundingRateProvider` protocol supports `DISABLED`, deterministic fixed assump
 and versioned historical series without network access. Historical-series gaps fail
 closed. At an applicable UTC timestamp, positive rates debit LONG and credit SHORT;
 negative rates reverse the sign. Funding uses open-position executed exposure at the
-documented event mark. Disabled funding emits a structured warning.
+M5-open mark. Entry at the exact boundary is ineligible; a pre-existing position exiting
+at the same boundary pays/receives funding first. Non-M5-aligned observations fail
+closed. Disabled funding emits a structured warning.
 
 ## 10. Portfolio accounting
 
@@ -94,6 +102,8 @@ funding cash flow. Open positions are marked at M5 close using the side-adverse 
 quote without an additional fee. Equity equals realized account value plus unrealized
 PnL. Margin, peak equity, drawdown, daily net PnL/trade count, consecutive losses,
 cooldown and open-position count are updated incrementally. Daily boundaries are UTC.
+Negative equity from a catastrophic gap remains an economic ledger result and triggers
+a structured halt; it is never clamped or reclassified as invalid input.
 
 ## 11. Risk Engine integration
 
@@ -136,7 +146,8 @@ serialization is the reproducibility artifact.
 `backtest_run_id` hashes code, strategy and app-config versions; explicit M5/M15/H1
 versions and their snapshot composite; instrument metadata version; execution, cost
 and funding model versions; UTC start/end; and initial equity. Model versions hash the
-actual assumptions. Paths, host, wall-clock and UUIDs are excluded. Same input and
+actual assumptions, including last-mile risk/cap/deviation rules and Decimal policy.
+Paths, host, wall-clock and UUIDs are excluded. Same input and
 state yield byte-identical ordered artifacts; a changed dataset, strategy or cost
 assumption changes the run ID.
 
