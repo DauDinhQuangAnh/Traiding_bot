@@ -55,12 +55,14 @@ API key, network I/O, order submission, trading loop và live trading vẫn ngo�
 - Baseline commit: `635303d`; version-identity remediation: `68bedeb`.
 - GitHub Actions Python 3.12 passed for remediation commit `68bedeb`, and external
   human review approved PHASE 4.
-- No production historical dataset, exchange client, network I/O, strategy calibration,
-  or PHASE 5 backtest engine is included.
+- The approved PHASE 4 baseline contains no production historical dataset, exchange
+  client, network I/O, strategy calibration, or backtest execution behavior.
 
 ## PHASE 5
 
 - [Implementation plan](docs/phase-5-plan.md)
+- [Backtesting contract](docs/backtesting.md)
+- [Acceptance review](docs/phase-5-review.md)
 - Last approved phase remains PHASE 4 while implementation and review are in progress.
 - PHASE 5 is deterministic historical simulation only; no Demo/Live execution,
   exchange client, parameter optimization, AI integration, or profitability claim.

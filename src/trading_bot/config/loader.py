@@ -15,6 +15,7 @@ import yaml
 
 from trading_bot.config.models import (
     AppConfig,
+    BacktestConfig,
     CalculationConfig,
     ConfirmationConfig,
     DataConfig,
@@ -34,13 +35,19 @@ from trading_bot.config.models import (
 )
 from trading_bot.config.secrets import without_secrets
 from trading_bot.domain.enums import (
+    BacktestEntryFillPolicy,
+    BacktestLimitFillPolicy,
     DecimalRoundingMode,
+    EndOfBacktestPolicy,
     EntryModel,
     ExecutionEnvironment,
+    FundingMode,
     GapPolicy,
+    GapStopPolicy,
     HistoricalConflictPolicy,
     HistoricalGapPolicy,
     HistoricalRawFormat,
+    IntrabarAmbiguityPolicy,
     JournalBackend,
     MarginMode,
     OrderType,
@@ -51,6 +58,7 @@ from trading_bot.domain.enums import (
     SignalComponentName,
     SmoothingMethod,
     TakeProfitFailurePolicy,
+    TargetGapPolicy,
     TargetModel,
     Timeframe,
     TimestampConvention,
@@ -158,6 +166,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
         "protection",
         "data",
         "historical",
+        "backtest",
         "journal",
         "monitoring",
     }
@@ -194,6 +203,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
     protection_config = _protection(_map(raw["protection"], "protection"))
     data_config = _data(_map(raw["data"], "data"))
     historical_config = _historical(_map(raw["historical"], "historical"))
+    backtest_config = _backtest(_map(raw["backtest"], "backtest"))
     journal_config = _journal(_map(raw["journal"], "journal"))
     monitoring_config = _monitoring(_map(raw["monitoring"], "monitoring"))
     return AppConfig(
@@ -208,6 +218,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
         protection_config,
         data_config,
         historical_config,
+        backtest_config,
         journal_config,
         monitoring_config,
     )
@@ -733,6 +744,60 @@ def _historical(raw: Mapping[str, Any]) -> HistoricalConfig:
         str(raw["parser_version"]),
         str(raw["normalization_version"]),
         str(raw["resampling_version"]),
+    )
+
+
+def _backtest(raw: Mapping[str, Any]) -> BacktestConfig:
+    expected = set(BacktestConfig.__dataclass_fields__)
+    _keys(raw, expected, "backtest")
+    fixed_rate = raw["fixed_funding_rate"]
+    return BacktestConfig(
+        initial_equity=_decimal(raw["initial_equity"], "backtest.initial_equity"),
+        execution_timeframe=_enum(
+            Timeframe, raw["execution_timeframe"], "backtest.execution_timeframe"
+        ),
+        entry_fill_policy=_enum(
+            BacktestEntryFillPolicy,
+            raw["entry_fill_policy"],
+            "backtest.entry_fill_policy",
+        ),
+        intrabar_ambiguity_policy=_enum(
+            IntrabarAmbiguityPolicy,
+            raw["intrabar_ambiguity_policy"],
+            "backtest.intrabar_ambiguity_policy",
+        ),
+        modeled_spread_rate=_decimal(raw["modeled_spread_rate"], "backtest.modeled_spread_rate"),
+        market_slippage_rate=_decimal(raw["market_slippage_rate"], "backtest.market_slippage_rate"),
+        stop_slippage_rate=_decimal(raw["stop_slippage_rate"], "backtest.stop_slippage_rate"),
+        maker_fee_rate=_decimal(raw["maker_fee_rate"], "backtest.maker_fee_rate"),
+        taker_fee_rate=_decimal(raw["taker_fee_rate"], "backtest.taker_fee_rate"),
+        funding_mode=_enum(FundingMode, raw["funding_mode"], "backtest.funding_mode"),
+        funding_interval=_duration(raw["funding_interval"], "backtest.funding_interval"),
+        fixed_funding_rate=(
+            None if fixed_rate is None else _decimal(fixed_rate, "backtest.fixed_funding_rate")
+        ),
+        allow_same_bar_exit_after_entry=_boolean(
+            raw["allow_same_bar_exit_after_entry"],
+            "backtest.allow_same_bar_exit_after_entry",
+        ),
+        gap_stop_policy=_enum(GapStopPolicy, raw["gap_stop_policy"], "backtest.gap_stop_policy"),
+        target_gap_policy=_enum(
+            TargetGapPolicy, raw["target_gap_policy"], "backtest.target_gap_policy"
+        ),
+        limit_fill_policy=_enum(
+            BacktestLimitFillPolicy,
+            raw["limit_fill_policy"],
+            "backtest.limit_fill_policy",
+        ),
+        end_position_policy=_enum(
+            EndOfBacktestPolicy,
+            raw["end_position_policy"],
+            "backtest.end_position_policy",
+        ),
+        halt_stops_run=_boolean(raw["halt_stops_run"], "backtest.halt_stops_run"),
+        execution_model_version=str(raw["execution_model_version"]),
+        spread_model_version=str(raw["spread_model_version"]),
+        funding_algorithm_version=str(raw["funding_algorithm_version"]),
     )
 
 

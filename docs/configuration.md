@@ -291,7 +291,37 @@ không tạo key execution khác cùng semantics.
 | `historical.normalization_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; semantic change changes data version |
 | `historical.resampling_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; changes derived M15/H1 versions, not canonical M5 |
 
-### 4.12 `journal`
+### 4.12 `backtest`
+
+| Key | Type | Class | Validation/meaning |
+|---|---|---|---|
+| `backtest.initial_equity` | `Decimal` | DEFAULT_FOR_DEVELOPMENT | Positive starting equity; part of run identity |
+| `backtest.execution_timeframe` | `Timeframe` | BACKTEST_REQUIRED | PHASE 5 requires `5m` |
+| `backtest.entry_fill_policy` | `BacktestEntryFillPolicy` | BACKTEST_REQUIRED | Only `NEXT_M5_OPEN` |
+| `backtest.intrabar_ambiguity_policy` | `IntrabarAmbiguityPolicy` | BACKTEST_REQUIRED | Only conservative `WORST_CASE` |
+| `backtest.modeled_spread_rate` | `Decimal` | DEFAULT_FOR_DEVELOPMENT | Non-negative ratio; explicit modeled assumption |
+| `backtest.market_slippage_rate` | `Decimal` | DEFAULT_FOR_DEVELOPMENT | Non-negative adverse market rate |
+| `backtest.stop_slippage_rate` | `Decimal` | DEFAULT_FOR_DEVELOPMENT | Non-negative adverse stop rate |
+| `backtest.maker_fee_rate` | `Decimal` | DEFAULT_FOR_DEVELOPMENT | Non-negative assumption; unused without maker semantics |
+| `backtest.taker_fee_rate` | `Decimal` | DEFAULT_FOR_DEVELOPMENT | Fee on actual executed notional |
+| `backtest.funding_mode` | `FundingMode` | BACKTEST_REQUIRED | `DISABLED`, `FIXED_ASSUMPTION`, or `HISTORICAL_SERIES` |
+| `backtest.funding_interval` | `Duration` | BACKTEST_REQUIRED | Positive deterministic event interval |
+| `backtest.fixed_funding_rate` | optional `Decimal` | DEFAULT_FOR_DEVELOPMENT | Required only for fixed mode; magnitude at most 1 |
+| `backtest.allow_same_bar_exit_after_entry` | `bool` | BACKTEST_REQUIRED | Applies declared ambiguity policy after entry |
+| `backtest.gap_stop_policy` | `GapStopPolicy` | BACKTEST_REQUIRED | Only `OPEN_OR_STOP_WORSE` |
+| `backtest.target_gap_policy` | `TargetGapPolicy` | BACKTEST_REQUIRED | Only `TARGET_PRICE_NO_IMPROVEMENT` |
+| `backtest.limit_fill_policy` | `BacktestLimitFillPolicy` | BACKTEST_REQUIRED | Full fill only after a future touch |
+| `backtest.end_position_policy` | `EndOfBacktestPolicy` | BACKTEST_REQUIRED | Force close at final M5 mark |
+| `backtest.halt_stops_run` | `bool` | BACKTEST_REQUIRED | Must be true in PHASE 5 |
+| `backtest.execution_model_version` | `str` | BACKTEST_REQUIRED | Non-empty execution algorithm label |
+| `backtest.spread_model_version` | `str` | BACKTEST_REQUIRED | Non-empty spread algorithm label |
+| `backtest.funding_algorithm_version` | `str` | BACKTEST_REQUIRED | Non-empty funding algorithm label |
+
+All numeric YAML values use quoted Decimal strings. These development values are
+reproducible assumptions, not current venue facts. M5, worst-case ambiguity, adverse
+gap handling, funding-mode coherence, and halt-stop behavior are cross-field enforced.
+
+### 4.13 `journal`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
@@ -302,7 +332,7 @@ không tạo key execution khác cùng semantics.
 | `journal.busy_timeout` | `Duration` | BACKTEST_REQUIRED | Positive |
 | `journal.retention_days` | optional int | DEFAULT_FOR_DEVELOPMENT | Mặc định null nghĩa giữ vô hạn; không xóa audit đang dùng |
 
-### 4.13 `monitoring`
+### 4.14 `monitoring`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|

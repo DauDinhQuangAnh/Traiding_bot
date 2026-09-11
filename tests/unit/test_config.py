@@ -43,3 +43,21 @@ def test_historical_config_rejects_unknown_key_and_invalid_enum():
     invalid["historical"]["timestamp_unit"] = "GUESS"
     with pytest.raises(ConfigurationError, match="invalid enum"):
         app_config_from_mapping(invalid)
+
+
+def test_backtest_config_rejects_unknown_key_float_and_unsafe_policy():
+    base = yaml.safe_load(Path("config/base.example.yaml").read_text(encoding="utf-8"))
+    unknown = deepcopy(base)
+    unknown["backtest"]["surprise"] = True
+    with pytest.raises(ConfigurationError, match="unknown"):
+        app_config_from_mapping(unknown)
+
+    lossy = deepcopy(base)
+    lossy["backtest"]["modeled_spread_rate"] = 0.0002
+    with pytest.raises(ConfigurationError, match="lossy"):
+        app_config_from_mapping(lossy)
+
+    unsafe = deepcopy(base)
+    unsafe["backtest"]["intrabar_ambiguity_policy"] = "OPTIMISTIC"
+    with pytest.raises(ConfigurationError, match="invalid enum"):
+        app_config_from_mapping(unsafe)

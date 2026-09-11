@@ -11,13 +11,19 @@ from typing import NoReturn
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from trading_bot.domain.enums import (
+    BacktestEntryFillPolicy,
+    BacktestLimitFillPolicy,
     DecimalRoundingMode,
+    EndOfBacktestPolicy,
     EntryModel,
     ExecutionEnvironment,
+    FundingMode,
     GapPolicy,
+    GapStopPolicy,
     HistoricalConflictPolicy,
     HistoricalGapPolicy,
     HistoricalRawFormat,
+    IntrabarAmbiguityPolicy,
     JournalBackend,
     MarginMode,
     OrderType,
@@ -28,6 +34,7 @@ from trading_bot.domain.enums import (
     SignalComponentName,
     SmoothingMethod,
     TakeProfitFailurePolicy,
+    TargetGapPolicy,
     TargetModel,
     Timeframe,
     TimestampConvention,
@@ -724,6 +731,75 @@ class HistoricalConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BacktestConfig:
+    initial_equity: Decimal
+    execution_timeframe: Timeframe
+    entry_fill_policy: BacktestEntryFillPolicy
+    intrabar_ambiguity_policy: IntrabarAmbiguityPolicy
+    modeled_spread_rate: Decimal
+    market_slippage_rate: Decimal
+    stop_slippage_rate: Decimal
+    maker_fee_rate: Decimal
+    taker_fee_rate: Decimal
+    funding_mode: FundingMode
+    funding_interval: timedelta
+    fixed_funding_rate: Decimal | None
+    allow_same_bar_exit_after_entry: bool
+    gap_stop_policy: GapStopPolicy
+    target_gap_policy: TargetGapPolicy
+    limit_fill_policy: BacktestLimitFillPolicy
+    end_position_policy: EndOfBacktestPolicy
+    halt_stops_run: bool
+    execution_model_version: str
+    spread_model_version: str
+    funding_algorithm_version: str
+
+    def __post_init__(self) -> None:
+        _positive_decimal(self.initial_equity, "backtest.initial_equity")
+        if self.execution_timeframe is not Timeframe.M5:
+            _error("backtest execution_timeframe must be 5m")
+        if self.entry_fill_policy is not BacktestEntryFillPolicy.NEXT_M5_OPEN:
+            _error("unsupported backtest entry fill policy")
+        if self.intrabar_ambiguity_policy is not IntrabarAmbiguityPolicy.WORST_CASE:
+            _error("PHASE 5 requires WORST_CASE intrabar ambiguity")
+        for name in (
+            "modeled_spread_rate",
+            "market_slippage_rate",
+            "stop_slippage_rate",
+            "maker_fee_rate",
+            "taker_fee_rate",
+        ):
+            _ratio(getattr(self, name), f"backtest.{name}")
+        _positive_duration(self.funding_interval, "backtest.funding_interval")
+        if self.fixed_funding_rate is not None:
+            _finite(self.fixed_funding_rate, "backtest.fixed_funding_rate")
+            if abs(self.fixed_funding_rate) > ONE:
+                _error("backtest.fixed_funding_rate magnitude must be <= 1")
+        if self.funding_mode is FundingMode.FIXED_ASSUMPTION:
+            if self.fixed_funding_rate is None:
+                _error("fixed funding mode requires fixed_funding_rate")
+        elif self.fixed_funding_rate is not None:
+            _error("fixed_funding_rate is only valid for FIXED_ASSUMPTION")
+        if self.gap_stop_policy is not GapStopPolicy.OPEN_OR_STOP_WORSE:
+            _error("unsupported gap stop policy")
+        if self.target_gap_policy is not TargetGapPolicy.TARGET_PRICE_NO_IMPROVEMENT:
+            _error("unsupported target gap policy")
+        if self.limit_fill_policy is not BacktestLimitFillPolicy.ASSUMED_FULL_FILL:
+            _error("unsupported limit fill policy")
+        if self.end_position_policy is not EndOfBacktestPolicy.FORCE_CLOSE_AT_FINAL_AVAILABLE_MARK:
+            _error("unsupported end-of-backtest position policy")
+        if not self.halt_stops_run:
+            _error("PHASE 5 risk HALT must stop the backtest run")
+        for name in (
+            "execution_model_version",
+            "spread_model_version",
+            "funding_algorithm_version",
+        ):
+            if not getattr(self, name).strip():
+                _error(f"backtest.{name} must be non-empty")
+
+
+@dataclass(frozen=True, slots=True)
 class JournalConfig:
     backend: JournalBackend
     database_path: Path
@@ -772,6 +848,7 @@ class AppConfig:
     protection: ProtectionConfig
     data: DataConfig
     historical: HistoricalConfig
+    backtest: BacktestConfig
     journal: JournalConfig
     monitoring: MonitoringConfig
 

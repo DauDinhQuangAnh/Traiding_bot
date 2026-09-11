@@ -153,6 +153,28 @@ historical:
   parser_version: csv-v1
   normalization_version: historical-normalization-v1
   resampling_version: ohlcv-resample-v1
+backtest:
+  initial_equity: "10000"
+  execution_timeframe: 5m
+  entry_fill_policy: NEXT_M5_OPEN
+  intrabar_ambiguity_policy: WORST_CASE
+  modeled_spread_rate: "0.0002"
+  market_slippage_rate: "0.0003"
+  stop_slippage_rate: "0.0005"
+  maker_fee_rate: "0.0002"
+  taker_fee_rate: "0.0005"
+  funding_mode: DISABLED
+  funding_interval: 8h
+  fixed_funding_rate: null
+  allow_same_bar_exit_after_entry: true
+  gap_stop_policy: OPEN_OR_STOP_WORSE
+  target_gap_policy: TARGET_PRICE_NO_IMPROVEMENT
+  limit_fill_policy: ASSUMED_FULL_FILL
+  end_position_policy: FORCE_CLOSE_AT_FINAL_AVAILABLE_MARK
+  halt_stops_run: true
+  execution_model_version: backtest-execution-v1
+  spread_model_version: symmetric-spread-v1
+  funding_algorithm_version: perpetual-funding-v1
 journal:
   backend: SQLITE
   database_path: var/trading_bot.db
