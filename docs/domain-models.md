@@ -194,7 +194,7 @@ Source: `levels`. Consumers: regime, strategy, journal.
 |---|---|---|
 | `range_id`, `symbol` | `str` | No |
 | `support_level_id`, `resistance_level_id` | `str` | No |
-| `support`, `resistance`, `range_width`, `range_mid`, `range_width_atr` | `Decimal` | No |
+| `support`, `resistance`, `reference_close`, `range_width`, `range_mid`, `range_width_atr` | `Decimal` | No |
 | `position_in_range` | `Decimal` | No |
 | `range_started_at`, `last_validated_at`, `as_of` | `datetime` | No |
 | `range_age_bars`, `support_tests`, `resistance_tests`, `breakout_confirmation_count` | `int` | No |
@@ -298,7 +298,7 @@ Source: `strategy.decision`. Consumers: risk, journal.
 | `side` | `TradeSide` | No |
 | `regime` | `MarketRegime` | No |
 | `signal_score`, `opposite_score` | `Decimal` | No |
-| `entry_price`, `stop_price` | `Decimal` | No |
+| `entry_price`, `stop_price`, `reference_atr` | `Decimal` | No |
 | `targets` | `tuple[Target, ...]` | No |
 | `planned_rr_before_costs`, `planned_rr_after_costs` | `Decimal` | No |
 | `cost_rate_estimate` | `CostRateEstimate` | No |
@@ -313,7 +313,9 @@ Source: `strategy.decision`. Consumers: risk, journal.
 | `created_at` | `datetime` | No |
 | `versions` | `VersionSet` | No |
 
-Validation: prices dương; scores `[0,100]`; `signal_score` khớp side đã chọn và
+Validation: prices và `reference_atr` dương; `reference_atr` là ATR M15 đã dùng để tạo
+structural stop, cho phép Risk Engine kiểm lại stop-distance gate mà không suy đoán;
+scores `[0,100]`; `signal_score` khớp side đã chọn và
 `opposite_score` là score phía còn lại trong referenced assessment; stop đúng phía;
 targets không rỗng và đúng phía entry; candidate không chứa quantity/leverage; regime
 không `UNCERTAIN/HIGH_VOLATILITY`; `created_at` là evaluation `as_of` UTC (không dùng
