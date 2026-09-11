@@ -21,5 +21,6 @@
   the project commands documented in `README.md`.
 - PHASE 5 source of truth: `docs/phase-5-plan.md`, `docs/backtesting.md`, and
   `docs/phase-5-review.md`. PHASE 6 is under review and must preserve the frozen PHASE 5
-  business semantics. Production datasets and generated backtest/validation artifacts
-  stay outside Git.
+  business semantics. PHASE 6 source of truth: `docs/phase-6-plan.md` and
+  `docs/validation.md`; review evidence is in `docs/phase-6-review.md`. Production
+  datasets and generated backtest/validation artifacts stay outside Git.

@@ -72,6 +72,9 @@ API key, network I/O, order submission, trading loop và live trading vẫn ngo�
 ## PHASE 6
 
 - Status: **IN PROGRESS / NOT YET APPROVED**.
+- [Implementation plan](docs/phase-6-plan.md)
+- [Validation contract](docs/validation.md)
+- [Implementation review](docs/phase-6-review.md)
 - Scope is chronological out-of-sample validation, fixed-strategy robustness evidence,
   and a local read-only dashboard foundation.
 - PHASE 6 does not authorize exchange connectivity, Demo/Live trading, automatic
