@@ -20,6 +20,7 @@ from trading_bot.config.models import (
     DataConfig,
     DirectionalRsiBand,
     ExecutionConfig,
+    HistoricalConfig,
     IndicatorConfig,
     JournalConfig,
     LevelConfig,
@@ -37,6 +38,9 @@ from trading_bot.domain.enums import (
     EntryModel,
     ExecutionEnvironment,
     GapPolicy,
+    HistoricalConflictPolicy,
+    HistoricalGapPolicy,
+    HistoricalRawFormat,
     JournalBackend,
     MarginMode,
     OrderType,
@@ -49,6 +53,8 @@ from trading_bot.domain.enums import (
     TakeProfitFailurePolicy,
     TargetModel,
     Timeframe,
+    TimestampConvention,
+    TimestampUnit,
     VolumeStatistic,
 )
 from trading_bot.domain.errors import ConfigurationError, DomainValidationError
@@ -151,6 +157,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
         "execution",
         "protection",
         "data",
+        "historical",
         "journal",
         "monitoring",
     }
@@ -186,6 +193,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
     execution_config = _execution(_map(raw["execution"], "execution"))
     protection_config = _protection(_map(raw["protection"], "protection"))
     data_config = _data(_map(raw["data"], "data"))
+    historical_config = _historical(_map(raw["historical"], "historical"))
     journal_config = _journal(_map(raw["journal"], "journal"))
     monitoring_config = _monitoring(_map(raw["monitoring"], "monitoring"))
     return AppConfig(
@@ -199,6 +207,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
         execution_config,
         protection_config,
         data_config,
+        historical_config,
         journal_config,
         monitoring_config,
     )
@@ -669,6 +678,61 @@ def _data(raw: Mapping[str, Any]) -> DataConfig:
         int(raw["max_backfill_attempts"]),
         _duration(raw["clock_drift_tolerance"], "data.clock_drift_tolerance"),
         _boolean(raw["store_raw"], "data.store_raw"),
+    )
+
+
+def _historical(raw: Mapping[str, Any]) -> HistoricalConfig:
+    expected = {
+        "raw_format",
+        "source_name",
+        "symbol_mapping",
+        "timeframe_mapping",
+        "column_mapping",
+        "timestamp_convention",
+        "timestamp_unit",
+        "closed_values",
+        "conflict_policy",
+        "gap_policy",
+        "canonical_timeframe",
+        "parser_version",
+        "normalization_version",
+        "resampling_version",
+    }
+    _keys(raw, expected, "historical")
+    symbols = _map(raw["symbol_mapping"], "historical.symbol_mapping")
+    timeframes = _map(raw["timeframe_mapping"], "historical.timeframe_mapping")
+    columns = _map(raw["column_mapping"], "historical.column_mapping")
+    closed_values = raw["closed_values"]
+    if not isinstance(closed_values, list) or not all(
+        isinstance(value, str) for value in closed_values
+    ):
+        raise ConfigurationError("historical.closed_values must be a string list")
+    return HistoricalConfig(
+        _enum(HistoricalRawFormat, raw["raw_format"], "historical.raw_format"),
+        str(raw["source_name"]),
+        {str(key): str(value) for key, value in symbols.items()},
+        {
+            str(key): _enum(Timeframe, value, f"historical.timeframe_mapping.{key}")
+            for key, value in timeframes.items()
+        },
+        {str(key): str(value) for key, value in columns.items()},
+        _enum(
+            TimestampConvention,
+            raw["timestamp_convention"],
+            "historical.timestamp_convention",
+        ),
+        _enum(TimestampUnit, raw["timestamp_unit"], "historical.timestamp_unit"),
+        frozenset(closed_values),
+        _enum(
+            HistoricalConflictPolicy,
+            raw["conflict_policy"],
+            "historical.conflict_policy",
+        ),
+        _enum(HistoricalGapPolicy, raw["gap_policy"], "historical.gap_policy"),
+        _enum(Timeframe, raw["canonical_timeframe"], "historical.canonical_timeframe"),
+        str(raw["parser_version"]),
+        str(raw["normalization_version"]),
+        str(raw["resampling_version"]),
     )
 
 

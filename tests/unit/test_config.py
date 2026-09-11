@@ -30,3 +30,16 @@ def test_yaml_float_for_decimal_is_rejected():
     raw["risk"]["risk_per_trade"] = 0.01
     with pytest.raises(ConfigurationError, match="lossy"):
         app_config_from_mapping(raw)
+
+
+def test_historical_config_rejects_unknown_key_and_invalid_enum():
+    base = yaml.safe_load(Path("config/base.example.yaml").read_text(encoding="utf-8"))
+    unknown = deepcopy(base)
+    unknown["historical"]["surprise"] = True
+    with pytest.raises(ConfigurationError, match="unknown"):
+        app_config_from_mapping(unknown)
+
+    invalid = deepcopy(base)
+    invalid["historical"]["timestamp_unit"] = "GUESS"
+    with pytest.raises(ConfigurationError, match="invalid enum"):
+        app_config_from_mapping(invalid)

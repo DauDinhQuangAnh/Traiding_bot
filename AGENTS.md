@@ -1,7 +1,8 @@
 # Repository guidance
 
-- Current phase: PHASE 3 approved offline core; do not start PHASE 4 without explicit
-  human approval.
+- Last approved phase: PHASE 3 offline core. PHASE 4 historical-data implementation is
+  under human review and remains `NEEDS_WORK` until the Python 3.12 CI run is green.
+  Do not start PHASE 5 without explicit human approval after that gate.
 - Source of truth: `README.md` and the approved documents under `docs/`, especially
   `technical-specification.md`, `domain-models.md`, `configuration.md`,
   `market-data.md`, `regime-detection.md`, `strategy.md`, `position-sizing.md`, and
@@ -17,3 +18,5 @@
   for every contract change.
 - Before handoff, run pytest, Ruff lint, Ruff format check, mypy, and compileall using
   the project commands documented in `README.md`.
+- PHASE 4 handoff: `docs/phase-4-plan.md`, `docs/historical-data.md`, and
+  `docs/phase-4-review.md`; production datasets stay outside Git.

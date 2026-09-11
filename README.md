@@ -44,3 +44,13 @@ an toàn không đủ rõ ràng.
 
 PHASE 3 chỉ triển khai domain core, pipeline replay và SQLite journal local. OKX adapter,
 API key, network I/O, order submission, trading loop và live trading vẫn ngoài phạm vi.
+
+## PHASE 4 review candidate
+
+- [Implementation plan](docs/phase-4-plan.md)
+- [Historical data contract](docs/historical-data.md)
+- [Acceptance review](docs/phase-4-review.md)
+- The offline implementation is complete, but the last approved phase remains PHASE 3
+  until the new commit passes the existing Python 3.12 GitHub Actions workflow.
+- No production historical dataset, exchange client, network I/O, strategy calibration,
+  or PHASE 5 backtest engine is included.

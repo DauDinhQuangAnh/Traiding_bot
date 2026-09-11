@@ -1,0 +1,4 @@
+timestamp,open,high,low,close,volume,symbol,timeframe,closed
+2026-01-01T00:00:00Z,100,102,99,101,10,BTCUSDT,5m,true
+2026-01-01T00:00:00Z,100,102,99,101,10,BTCUSDT,5m,true
+2026-01-01T00:05:00Z,101,103,100,102,11,BTCUSDT,5m,true

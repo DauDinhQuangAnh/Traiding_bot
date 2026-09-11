@@ -15,6 +15,9 @@ from trading_bot.domain.enums import (
     EntryModel,
     ExecutionEnvironment,
     GapPolicy,
+    HistoricalConflictPolicy,
+    HistoricalGapPolicy,
+    HistoricalRawFormat,
     JournalBackend,
     MarginMode,
     OrderType,
@@ -27,6 +30,8 @@ from trading_bot.domain.enums import (
     TakeProfitFailurePolicy,
     TargetModel,
     Timeframe,
+    TimestampConvention,
+    TimestampUnit,
     VolumeStatistic,
 )
 from trading_bot.domain.errors import ConfigurationError, DomainValidationError
@@ -654,6 +659,71 @@ class DataConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoricalConfig:
+    raw_format: HistoricalRawFormat
+    source_name: str
+    symbol_mapping: Mapping[str, str]
+    timeframe_mapping: Mapping[str, Timeframe]
+    column_mapping: Mapping[str, str]
+    timestamp_convention: TimestampConvention
+    timestamp_unit: TimestampUnit
+    closed_values: frozenset[str]
+    conflict_policy: HistoricalConflictPolicy
+    gap_policy: HistoricalGapPolicy
+    canonical_timeframe: Timeframe
+    parser_version: str
+    normalization_version: str
+    resampling_version: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "source_name",
+            "parser_version",
+            "normalization_version",
+            "resampling_version",
+        ):
+            if not getattr(self, name).strip():
+                _error(f"historical.{name} must be non-empty")
+        if self.raw_format is not HistoricalRawFormat.CSV:
+            _error("PHASE 4 supports CSV raw input only")
+        if self.canonical_timeframe is not Timeframe.M5:
+            _error("historical canonical_timeframe must be 5m")
+        if self.conflict_policy is not HistoricalConflictPolicy.FAIL:
+            _error("historical conflicting duplicates must fail")
+        if self.gap_policy is not HistoricalGapPolicy.FAIL:
+            _error("historical gaps must fail")
+        if not self.symbol_mapping or any(
+            not source.strip() or canonical != "BTC-USDT-SWAP"
+            for source, canonical in self.symbol_mapping.items()
+        ):
+            _error("historical symbol mapping must explicitly target BTC-USDT-SWAP")
+        if not self.timeframe_mapping or set(self.timeframe_mapping.values()) - set(Timeframe):
+            _error("historical timeframe mapping is invalid")
+        required_columns = {
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "symbol",
+            "timeframe",
+            "closed",
+        }
+        if set(self.column_mapping) != required_columns or any(
+            not value.strip() for value in self.column_mapping.values()
+        ):
+            _error("historical column_mapping must contain the exact canonical schema")
+        if len(set(self.column_mapping.values())) != len(self.column_mapping):
+            _error("historical column headers must be unique")
+        if not self.closed_values or any(not value.strip() for value in self.closed_values):
+            _error("historical.closed_values must be non-empty strings")
+        object.__setattr__(self, "symbol_mapping", freeze_mapping(self.symbol_mapping))
+        object.__setattr__(self, "timeframe_mapping", freeze_mapping(self.timeframe_mapping))
+        object.__setattr__(self, "column_mapping", freeze_mapping(self.column_mapping))
+
+
+@dataclass(frozen=True, slots=True)
 class JournalConfig:
     backend: JournalBackend
     database_path: Path
@@ -701,6 +771,7 @@ class AppConfig:
     execution: ExecutionConfig
     protection: ProtectionConfig
     data: DataConfig
+    historical: HistoricalConfig
     journal: JournalConfig
     monitoring: MonitoringConfig
 

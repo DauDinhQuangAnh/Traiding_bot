@@ -27,3 +27,11 @@ class StateTransitionError(TradingBotError):
 
 class PersistenceError(TradingBotError):
     """A local append-only persistence operation failed."""
+
+
+class HistoricalDataError(TradingBotError):
+    """A historical ingestion or repository boundary failed."""
+
+
+class HistoricalParserError(HistoricalDataError):
+    """A raw historical file is unreadable or has an invalid schema."""

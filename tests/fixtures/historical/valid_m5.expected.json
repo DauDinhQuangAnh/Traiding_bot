@@ -1,0 +1,43 @@
+{
+  "candle_count": 12,
+  "canonical_hash": "004fcbc6a3c585207a20b6bf41bd303bfacbafde2a208264eba101f9a540bcf8",
+  "data_version": "6336a15f8c4ba7ca9b833d221ecf7a7e234dd96078f3382c8773a4fe5e7e2888",
+  "dataset_bytes_sha256": "88fe9ce01098dcc26e15914496bbca4fbe41243afecb2abf17a48bf50ec8010e",
+  "dataset_id": "3b27f3548f82ffd3ceb4cbda951c72b2e4d8143070825d4c78f96d7111ac17fa",
+  "first_candle": {
+    "candle_id": "5719059e0ffd3b0582964c6ed92cc6768e47a5e031467741f714907e3f49e19e",
+    "close": "101",
+    "close_time": "2026-01-01T00:05:00.000000Z",
+    "data_version": "6336a15f8c4ba7ca9b833d221ecf7a7e234dd96078f3382c8773a4fe5e7e2888",
+    "event_time": "2026-01-01T00:05:00.000000Z",
+    "high": "102",
+    "is_closed": true,
+    "low": "99",
+    "open": "100",
+    "open_time": "2026-01-01T00:00:00.000000Z",
+    "receive_time": "2026-01-01T00:05:00.000000Z",
+    "source": "local_csv",
+    "symbol": "BTC-USDT-SWAP",
+    "timeframe": "5m",
+    "volume": "10"
+  },
+  "last_candle": {
+    "candle_id": "75d407897c72dfa05f861eb641abf102875111817304ea917679395d89c03d84",
+    "close": "112",
+    "close_time": "2026-01-01T01:00:00.000000Z",
+    "data_version": "6336a15f8c4ba7ca9b833d221ecf7a7e234dd96078f3382c8773a4fe5e7e2888",
+    "event_time": "2026-01-01T01:00:00.000000Z",
+    "high": "113",
+    "is_closed": true,
+    "low": "110",
+    "open": "111",
+    "open_time": "2026-01-01T00:55:00.000000Z",
+    "receive_time": "2026-01-01T01:00:00.000000Z",
+    "source": "local_csv",
+    "symbol": "BTC-USDT-SWAP",
+    "timeframe": "5m",
+    "volume": "21"
+  },
+  "manifest_bytes_sha256": "50e544c09a38120bb6847ab9314c66e6e312976909f487c153dc528ddef1ecaa",
+  "manifest_id": "74862ebe99ce2b9621bf8706767230fbbb3789a9e2c8ea417ef3ffaa55a459c7"
+}

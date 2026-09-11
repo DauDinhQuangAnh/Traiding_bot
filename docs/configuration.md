@@ -42,6 +42,7 @@ sort key, giữ Decimal dưới dạng string và normalize duration/timeframe. 
 | `execution` | Dry-run, approval TTL, timeout, partial-fill/emergency policy |
 | `protection` | Stop/TP validation và failure actions |
 | `data` | Timeframes, warm-up, freshness, gap/backfill policy |
+| `historical` | Offline parser, normalization, mapping and dataset policies |
 | `journal` | SQLite path, append/audit behavior, retention |
 | `monitoring` | Health thresholds, alerts, reconciliation cadence |
 
@@ -268,7 +269,26 @@ không tạo key execution khác cùng semantics.
 | `data.clock_drift_tolerance` | `Duration` | BACKTEST_REQUIRED | Non-negative |
 | `data.store_raw` | `bool` | DEFAULT_FOR_DEVELOPMENT | True cho reproducibility; raw immutable |
 
-### 4.11 `journal`
+### 4.11 `historical`
+
+| Key | Type | Class | Validation/meaning |
+|---|---|---|---|
+| `historical.raw_format` | `HistoricalRawFormat` | DEFAULT_FOR_DEVELOPMENT | PHASE 4: `CSV` only; never inferred from path |
+| `historical.source_name` | `str` | DEFAULT_FOR_DEVELOPMENT | Stable non-empty logical source, not an absolute path |
+| `historical.symbol_mapping` | `Mapping[str,str]` | DEFAULT_FOR_DEVELOPMENT | Explicit source → `BTC-USDT-SWAP`; unknown rejects |
+| `historical.timeframe_mapping` | `Mapping[str,Timeframe]` | DEFAULT_FOR_DEVELOPMENT | Explicit source values; no duration heuristic |
+| `historical.column_mapping` | `Mapping[str,str]` | DEFAULT_FOR_DEVELOPMENT | Exact raw schema registry for timestamp/OHLCV/symbol/timeframe/closed |
+| `historical.timestamp_convention` | `TimestampConvention` | DEFAULT_FOR_DEVELOPMENT | `OPEN_TIME` or `CLOSE_TIME` |
+| `historical.timestamp_unit` | `TimestampUnit` | DEFAULT_FOR_DEVELOPMENT | `ISO8601`, `UNIX_SECONDS` or `UNIX_MILLISECONDS`; no guessing |
+| `historical.closed_values` | `set[str]` | DEFAULT_FOR_DEVELOPMENT | Explicit accepted source close-status strings |
+| `historical.conflict_policy` | `HistoricalConflictPolicy` | DEFAULT_FOR_DEVELOPMENT | PHASE 4 requires `FAIL` |
+| `historical.gap_policy` | `HistoricalGapPolicy` | DEFAULT_FOR_DEVELOPMENT | PHASE 4 requires `FAIL`; no synthetic fill |
+| `historical.canonical_timeframe` | `Timeframe` | DEFAULT_FOR_DEVELOPMENT | Must be `5m`; M15/H1 derived |
+| `historical.parser_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; semantic change changes data version |
+| `historical.normalization_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; semantic change changes data version |
+| `historical.resampling_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; semantic change changes data version |
+
+### 4.12 `journal`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
@@ -279,7 +299,7 @@ không tạo key execution khác cùng semantics.
 | `journal.busy_timeout` | `Duration` | BACKTEST_REQUIRED | Positive |
 | `journal.retention_days` | optional int | DEFAULT_FOR_DEVELOPMENT | Mặc định null nghĩa giữ vô hạn; không xóa audit đang dùng |
 
-### 4.12 `monitoring`
+### 4.13 `monitoring`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
@@ -328,6 +348,9 @@ không tạo key execution khác cùng semantics.
 13. `execution.enabled=false` không được override bằng CLI shortcut không audit.
 14. Mọi `BACKTEST_REQUIRED` field phải explicit; null/missing là startup error, không
     tự lấy “best practice” làm default.
+15. Historical parser assumptions phải explicit; mappings/schema đúng exact registry;
+    base timeframe là M5; conflict/gap policy đều `FAIL`; path/mtime không tham gia
+    data identity.
 
 Bất kỳ field hoặc cross-field rule nào fail đều phát `CONFIG_INVALID`, giữ global state
 ở `HALTED` và không khởi tạo execution/provider side effect.

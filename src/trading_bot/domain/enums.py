@@ -353,6 +353,53 @@ class ExecutionEnvironment(StrEnum):
 
 
 @unique
+class HistoricalRawFormat(StrEnum):
+    CSV = "CSV"
+
+
+@unique
+class TimestampConvention(StrEnum):
+    OPEN_TIME = "OPEN_TIME"
+    CLOSE_TIME = "CLOSE_TIME"
+
+
+@unique
+class TimestampUnit(StrEnum):
+    ISO8601 = "ISO8601"
+    UNIX_SECONDS = "UNIX_SECONDS"
+    UNIX_MILLISECONDS = "UNIX_MILLISECONDS"
+
+
+@unique
+class HistoricalConflictPolicy(StrEnum):
+    FAIL = "FAIL"
+
+
+@unique
+class HistoricalGapPolicy(StrEnum):
+    FAIL = "FAIL"
+
+
+@unique
+class NormalizationStatus(StrEnum):
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+
+
+@unique
+class HistoricalIngestionStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+
+
+@unique
+class HistoricalDatasetStatus(StrEnum):
+    VALID = "VALID"
+    INVALID = "INVALID"
+
+
+@unique
 class JournalEventType(StrEnum):
     DECISION_EVALUATED = "DECISION_EVALUATED"
     RISK_EVALUATED = "RISK_EVALUATED"

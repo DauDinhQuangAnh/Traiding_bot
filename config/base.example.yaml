@@ -138,6 +138,21 @@ data:
   max_backfill_attempts: 3
   clock_drift_tolerance: 2s
   store_raw: true
+historical:
+  raw_format: CSV
+  source_name: local_csv
+  symbol_mapping: {BTCUSDT: BTC-USDT-SWAP, BTC-USDT-SWAP: BTC-USDT-SWAP}
+  timeframe_mapping: {5m: 5m, 15m: 15m, 1h: 1h}
+  column_mapping: {timestamp: timestamp, open: open, high: high, low: low, close: close, volume: volume, symbol: symbol, timeframe: timeframe, closed: closed}
+  timestamp_convention: OPEN_TIME
+  timestamp_unit: ISO8601
+  closed_values: ["true", "1", "closed"]
+  conflict_policy: FAIL
+  gap_policy: FAIL
+  canonical_timeframe: 5m
+  parser_version: csv-v1
+  normalization_version: historical-normalization-v1
+  resampling_version: ohlcv-resample-v1
 journal:
   backend: SQLITE
   database_path: var/trading_bot.db
