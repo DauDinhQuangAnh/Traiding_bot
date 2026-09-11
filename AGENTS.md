@@ -1,9 +1,10 @@
 # Repository guidance
 
-- Last approved phase: PHASE 3 offline core. PHASE 4 historical-data implementation is
-  under remediation review. Python 3.12 CI passed for baseline `635303d`; the version
-  identity remediation remains `NEEDS_WORK` until its own CI run is green. Do not
-  start PHASE 5 without explicit human approval after that gate.
+- Last approved phase: PHASE 4 historical-data foundation. Baseline `635303d` and
+  version-identity remediation `68bedeb` are externally approved; GitHub Actions
+  Python 3.12 passed for `68bedeb`. PHASE 5 deterministic backtest implementation is
+  explicitly authorized and in progress, but is not approved until every acceptance
+  criterion has evidence and human review approves it.
 - Source of truth: `README.md` and the approved documents under `docs/`, especially
   `technical-specification.md`, `domain-models.md`, `configuration.md`,
   `market-data.md`, `regime-detection.md`, `strategy.md`, `position-sizing.md`, and
@@ -20,4 +21,5 @@
 - Before handoff, run pytest, Ruff lint, Ruff format check, mypy, and compileall using
   the project commands documented in `README.md`.
 - PHASE 4 handoff: `docs/phase-4-plan.md`, `docs/historical-data.md`, and
-  `docs/phase-4-review.md`; production datasets stay outside Git.
+  `docs/phase-4-review.md`. PHASE 5 source of truth: `docs/phase-5-plan.md`; production
+  datasets and generated backtest artifacts stay outside Git.

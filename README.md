@@ -10,6 +10,8 @@ an toàn không đủ rõ ràng.
 - PHASE 2 — Technical Specification: **COMPLETE**
 - PHASE 2 Design Gate — **APPROVED**
 - PHASE 3 — Deterministic Offline Core: **APPROVED after remediation**
+- PHASE 4 — Historical Data Foundation: **APPROVED after version-identity remediation**
+- PHASE 5 — Backtest Engine: **IN PROGRESS**
 - Phạm vi thị trường dự kiến: `BTC-USDT-SWAP`, OKX Demo Trading
 - Live trading: **không thuộc phạm vi hiện tại và phải luôn mặc định tắt**
 - Repository có package Python chạy offline; không có mã kết nối hoặc gửi lệnh tới OKX.
@@ -45,13 +47,20 @@ an toàn không đủ rõ ràng.
 PHASE 3 chỉ triển khai domain core, pipeline replay và SQLite journal local. OKX adapter,
 API key, network I/O, order submission, trading loop và live trading vẫn ngoài phạm vi.
 
-## PHASE 4 review candidate
+## PHASE 4
 
 - [Implementation plan](docs/phase-4-plan.md)
 - [Historical data contract](docs/historical-data.md)
 - [Acceptance review](docs/phase-4-review.md)
-- Python 3.12 CI passed for baseline `635303d`. Historical version-identity
-  remediation is under review; the last approved phase remains PHASE 3 until the
-  remediation commit passes the same workflow and receives human approval.
+- Baseline commit: `635303d`; version-identity remediation: `68bedeb`.
+- GitHub Actions Python 3.12 passed for remediation commit `68bedeb`, and external
+  human review approved PHASE 4.
 - No production historical dataset, exchange client, network I/O, strategy calibration,
   or PHASE 5 backtest engine is included.
+
+## PHASE 5
+
+- [Implementation plan](docs/phase-5-plan.md)
+- Last approved phase remains PHASE 4 while implementation and review are in progress.
+- PHASE 5 is deterministic historical simulation only; no Demo/Live execution,
+  exchange client, parameter optimization, AI integration, or profitability claim.

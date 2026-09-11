@@ -2,11 +2,11 @@
 
 ## Overall status
 
-**NEEDS_WORK pending remediation CI**. GitHub Actions Python 3.12 passed for baseline
-commit `635303d`. External review then found two semantic identity gaps: the M5 version
-depended on full app config, and derived timeframes reused the M5 version. Both are
-remediated locally, but the remediation commit still needs its own green Python 3.12
-run and human review. PHASE 3 remains the last approved phase; PHASE 5 must not begin.
+**PHASE 4: APPROVED after version-identity remediation.** GitHub Actions Python 3.12
+passed for baseline commit `635303d` and remediation commit `68bedeb`. External human
+review approved the remediation and authorized PHASE 5. This approval covers only the
+offline historical-data foundation; it is not evidence of strategy profitability or
+permission for Demo/Live trading.
 
 ## Acceptance evidence
 
@@ -34,10 +34,10 @@ run and human review. PHASE 3 remains the last approved phase; PHASE 5 must not 
 | 20 | No OKX/network client | PASS | changed-file audit; historical package is local-only |
 | 21 | No strategy changes | PASS | changed-file audit; no strategy source modified |
 | 22 | No threshold optimization | PASS | changed-file audit; example strategy config unchanged |
-| 23 | Python 3.12 CI passes | PASS for baseline | GitHub Actions passed for `635303d`; remediation run pending |
+| 23 | Python 3.12 CI passes | PASS | GitHub Actions passed for remediation commit `68bedeb` |
 | 24 | Historical-data documentation complete | PASS | `docs/historical-data.md`, sections 1–22 |
 | 25 | Review contains concrete evidence | PASS | this criterion table and gate results |
-| 26 | AGENTS handoff updated | PASS | `AGENTS.md` preserves PHASE 3 approval and blocks PHASE 5 |
+| 26 | AGENTS handoff updated | PASS | `AGENTS.md` records PHASE 4 approval and the explicit PHASE 5 gate |
 | 27 | Production data is not committed | PASS | `data/README.md`, `.gitignore`, fixture-only Git inputs |
 
 ## Local quality gates
@@ -94,8 +94,11 @@ Concrete deterministic fixture evidence:
 - Composite `(M5 d115846e…, M15 7c87ed39…, H1 9e87b826…)` gives snapshot version
   `b2c20fa1…`.
 
-## Remaining gate
+## Approval evidence
 
-Commit remediation locally, then run the existing `.github/workflows/ci.yml` on Python
-3.12 when a push is explicitly authorized. Only a green remediation run plus human
-review can change PHASE 4 to `APPROVED` and permit proposing PHASE 5.
+- Historical foundation baseline: `635303d`.
+- Version-identity remediation: `68bedeb`.
+- GitHub Actions Python 3.12: PASS for `68bedeb`.
+- External human review: APPROVED.
+
+PHASE 4 is the last approved phase while PHASE 5 is implemented and reviewed.
