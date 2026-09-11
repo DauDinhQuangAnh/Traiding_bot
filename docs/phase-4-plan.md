@@ -96,7 +96,10 @@ No unbounded `get_latest()` API is exposed on the backtest-critical path.
 - Reject upward resampling with an incomplete group, gap, misalignment, mixed identity,
   or unsupported/downward conversion.
 - Derived IDs include ordered child IDs, target timeframe, resampling algorithm version,
-  and data version; source identifies the derivation path.
+  and derived data version; source identifies the derivation path.
+- Canonical M5, derived M15 and derived H1 each have distinct semantic versions.
+  Snapshot/replay uses a deterministic composite of the three while repository queries
+  retain explicit per-timeframe versions.
 - Cross-timeframe validation compares exact OHLCV and aligned child coverage by default.
   No undocumented epsilon is used.
 

@@ -125,26 +125,61 @@ volume = sum(child volumes)
 ```
 
 An incomplete group, child gap or misaligned first interval fails the operation. Derived
-source names encode the path, and IDs include ordered child IDs, target timeframe,
-resampling algorithm version and data version.
+source names encode the path. Each conversion creates its own derived data version from
+the source data version, source/target timeframe and resampling algorithm version.
+Derived candle IDs additionally include ordered child IDs, and every derived candle
+carries exactly the derived dataset version.
 
 ## 13. Dataset manifest
 
 Every valid dataset has a deterministic manifest containing manifest/dataset IDs,
-symbol/timeframe, sorted source content hashes, parser/normalizer/resampling/code/config
-versions, counts, bounds and canonical candle hash. Absolute path, file modification
-time and ingestion wall-clock are excluded. SHA-256 is used for files and canonical
-artifacts.
+symbol/timeframe, sorted source content hashes, raw data version, historical semantics version,
+parser/normalizer versions, counts, bounds and canonical candle
+hash. A derived manifest also contains typed machine-readable lineage:
+source_dataset_id, source_data_version, source_timeframe, target_timeframe and
+resampling_version. Absolute path, file modification time, app config and ingestion
+wall-clock are excluded. SHA-256 is used for files and canonical artifacts.
 
-## 14. Data versioning
+## 14. Historical Version Identity
 
-`data_version` derives from source byte hashes and all parsing/normalization/resampling
-semantics plus config version. Therefore it changes when input bytes, correction,
-parser semantics or normalization/resampling versions change. Copying identical bytes
-to another path does not change dataset, manifest or data version.
+The version layers have separate responsibilities:
 
-All three canonical timeframes share the same bundle data version; timeframe and
-canonical content distinguish dataset/manifest IDs. Old versions remain queryable.
+- app_config_version is the canonical full non-secret AppConfig hash used by PHASE 3
+  decisions. Strategy, regime, risk, execution, journal and monitoring changes belong
+  here and never enter historical dataset identity.
+- raw_data_version hashes the canonical sorted tuple of source-file SHA-256 hashes.
+- historical_semantics_version hashes only raw-to-canonical semantics: raw format and
+  source identity, explicit symbol/timeframe/column mappings, timestamp convention/unit,
+  accepted closed values, conflict/gap policies, canonical timeframe, parser version and
+  normalization version.
+- Canonical M5 data_version hashes raw_data_version plus historical_semantics_version.
+- A derived M15/H1 data_version hashes source data version, source timeframe, target
+  timeframe and resampling algorithm version.
+- The snapshot composite data version hashes the explicit M5, M15 and H1 versions in
+  canonical timeframe order.
+
+historical.resampling_version is deliberately excluded from raw-to-M5 semantics
+because it cannot change canonical M5 bytes. It enters every derived version directly.
+code_version and app_config_version belong to PHASE 3 run metadata rather than
+historical artifacts. Parser, normalization and resampling versions are the explicit
+transformation compatibility promises, so an unrelated code or config change cannot
+churn dataset, manifest or candle identities.
+
+    raw file hash
+        ↓
+    historical semantics
+        ↓
+    M5 data version
+        ↓
+    resample-v3
+        ├── M15 data version
+        └── H1 data version
+              ↓
+    composite multi-timeframe snapshot version
+
+Copying identical bytes to another path preserves identity. A source correction,
+raw-to-canonical semantic change, target timeframe change or resampler version change
+creates a new appropriate version. Old versions remain queryable.
 
 ## 15. Repository queries
 
@@ -155,7 +190,9 @@ canonical content distinguish dataset/manifest IDs. Old versions remain queryabl
 
 SQLite stores versioned immutable candles and manifests transactionally, with uniqueness
 on dataset identity and `(data_version, symbol, timeframe, open_time)`. Unknown versions
-fail explicitly. There is no unbounded `get_latest()` in the replay path.
+fail explicitly. Multiple M15/H1 resampling versions can coexist because their derived
+data versions and candle IDs differ. There is no unbounded `get_latest()` in the replay
+path.
 
 ## 16. Point-in-time rules
 
@@ -163,20 +200,20 @@ Every returned candle satisfies `close_time <= as_of`. An H1 candle still formin
 the cutoff is excluded. Adding a future or corrected dataset creates another version;
 querying the persisted old version before and after that append is byte-identical.
 
-This resolves an apparent acceptance tension: IDs intentionally contain `data_version`,
-so replaying the same cutoff under a *new* version must produce new audit IDs. The
-look-ahead invariant is instead proven by querying/replaying the same immutable old
-version after newer versions are stored. Market values may also be compared separately,
-but IDs from different versions must not be asserted equal.
+IDs intentionally contain the relevant data or composite snapshot version, so replaying
+under a new version must produce new audit IDs. The look-ahead invariant is proven by
+querying/replaying the same immutable per-timeframe version bundle after newer versions
+are stored.
 
 ## 17. Snapshot generation
 
 Each closed M15 candle in the bounded trigger range is an evaluation candidate. The
 builder obtains `required_bars()` for every timeframe, requests only candles closing by
-the trigger cutoff, and skips early triggers until all three histories satisfy warm-up.
-It does not reduce indicator requirements or borrow future bars. It then calls the
-existing typed PHASE 3 snapshot builder with `quote=None` and deterministic
-`created_at=as_of`.
+the trigger cutoff using a typed HistoricalVersionSet with explicit M5/M15/H1 storage
+versions, and skips early triggers until all three histories satisfy warm-up. It does
+not reduce indicator requirements or borrow future bars. It calls the existing typed
+PHASE 3 snapshot builder with `quote=None`, deterministic `created_at=as_of`, and the
+composite multi-timeframe version in `VersionSet.data_version`.
 
 Historical OHLCV has no fabricated bid/ask quote. PHASE 3 market strategy may produce
 a candidate, but historical execution/risk approval assumptions belong to PHASE 5.
@@ -184,16 +221,20 @@ Any quote used by isolated tests is labelled synthetic test data.
 
 ## 18. Data corrections
 
-A corrected file produces a new SHA-256 source hash, data version, candles and manifests.
-SQLite retains both versions. Existing snapshot/replay artifacts retain their original
-version and reproduce without retroactive edits.
+A corrected file produces a new SHA-256 source hash and M5 version. Derived M15/H1
+versions transitively change because they include the source version. SQLite retains all
+raw and derived versions. Existing snapshot/replay artifacts retain their original
+three-version bundle and reproduce without retroactive edits.
 
 ## 19. Reproducibility
 
 Golden tests pin canonical first/last candles, dataset/manifest IDs, canonical hash and
 serialized artifact hashes. Integration tests ingest identical bytes at different paths,
 recreate SQLite storage, rebuild snapshots and replay PHASE 3; manifests, snapshot IDs,
-decisions, regimes, signals and candidate IDs are canonical-equal.
+decisions, regimes, signals and candidate IDs are canonical-equal. Regression tests also
+prove strategy/risk changes do not affect historical identity, derived resampler
+versions coexist, and changing one timeframe version changes the composite snapshot
+version.
 
 ## 20. Backtest eligibility
 

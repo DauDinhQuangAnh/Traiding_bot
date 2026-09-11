@@ -42,9 +42,7 @@ def test_missing_required_csv_column_is_typed_failure(tmp_path, app_config):
     parser = CsvHistoricalDataParser(app_config.historical.column_mapping)
     with pytest.raises(HistoricalParserError, match="missing required columns"):
         tuple(parser.parse(path, "local_csv"))
-    result = ingest_csv_files(
-        (path,), app_config.historical, config_version="config-v1", code_version="code-v1"
-    )
+    result = ingest_csv_files((path,), app_config.historical)
     assert result.status is HistoricalIngestionStatus.FAILED
     assert not result.is_backtest_eligible
 

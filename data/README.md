@@ -5,9 +5,11 @@ under `data/raw/` and reproducible canonical SQLite artifacts under `data/canoni
 (both are ignored). Small reviewable fixtures belong under `tests/fixtures/historical/`.
 
 Dataset locations are local runtime inputs and never participate in dataset identity.
-Identity comes from SHA-256 source content, parser/normalization/resampling versions,
-typed normalization semantics, config version, and canonical candle content. Copying
-the same bytes to another directory therefore preserves identity; a source correction
-creates a new data version. Keep prior source files/databases when old replay artifacts
-must remain reproducible, and back them up by content/version rather than modification
-time.
+M5 identity comes from a raw data version over SHA-256 source content and typed
+raw-to-canonical semantics;
+derived timeframe identity additionally includes source lineage, target timeframe and
+resampling version. Full application config and code versions belong to run metadata,
+not dataset identity. Copying the same bytes to another directory therefore preserves
+identity; a source correction creates new M5 and transitive derived versions. Keep prior
+source files/databases when old replay artifacts must remain reproducible, and back them
+up by content/version rather than modification time.

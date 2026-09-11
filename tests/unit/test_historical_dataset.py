@@ -22,8 +22,6 @@ def _ingest(name, app_config):
     return ingest_csv_files(
         (FIXTURES / name,),
         app_config.historical,
-        config_version="config-v1",
-        code_version="code-v1",
     )
 
 
@@ -60,8 +58,6 @@ def test_manifest_hashes_every_input_file_including_header_only(tmp_path, app_co
     result = ingest_csv_files(
         (FIXTURES / "valid_m5.csv", header_only),
         app_config.historical,
-        config_version="config-v1",
-        code_version="code-v1",
     )
     assert result.manifest is not None
     assert result.manifest.source_content_hashes == tuple(
@@ -104,25 +100,22 @@ def test_ordered_reverse_and_arbitrary_input_are_sorted_with_diagnostics(app_con
     assert ReasonCode.DATA_OUT_OF_ORDER in fixture.quality_report.reason_codes
 
 
-def _resample(source, target, app_config):
+def _resample(source, source_manifest, target, app_config, *, algorithm_version=None):
     return resample_dataset(
         source,
+        source_manifest,
         target,
-        algorithm_version=app_config.historical.resampling_version,
-        source_content_hashes=("source-hash",),
-        parser_version=app_config.historical.parser_version,
-        normalization_version=app_config.historical.normalization_version,
-        code_version="code-v1",
-        config_version="config-v1",
+        algorithm_version=algorithm_version or app_config.historical.resampling_version,
     )
 
 
 def test_resampling_m5_to_m15_m5_to_h1_and_m15_to_h1(app_config):
-    base = _ingest("valid_m5.csv", app_config).dataset
-    assert base is not None
-    m15 = _resample(base, Timeframe.M15, app_config)
-    h1_direct = _resample(base, Timeframe.H1, app_config)
-    h1_via_m15 = _resample(m15.dataset, Timeframe.H1, app_config)
+    base_result = _ingest("valid_m5.csv", app_config)
+    base, base_manifest = base_result.dataset, base_result.manifest
+    assert base is not None and base_manifest is not None
+    m15 = _resample(base, base_manifest, Timeframe.M15, app_config)
+    h1_direct = _resample(base, base_manifest, Timeframe.H1, app_config)
+    h1_via_m15 = _resample(m15.dataset, m15.manifest, Timeframe.H1, app_config)
     assert m15.dataset.candle_count == 4
     assert h1_direct.dataset.candle_count == h1_via_m15.dataset.candle_count == 1
     direct = h1_direct.dataset.candles[0]
@@ -143,8 +136,9 @@ def test_resampling_m5_to_m15_m5_to_h1_and_m15_to_h1(app_config):
 
 
 def test_resampling_rejects_incomplete_gap_misalignment_and_downsampling(app_config):
-    base = _ingest("valid_m5.csv", app_config).dataset
-    assert base is not None
+    base_result = _ingest("valid_m5.csv", app_config)
+    base, base_manifest = base_result.dataset, base_result.manifest
+    assert base is not None and base_manifest is not None
     incomplete = replace(
         base,
         candles=base.candles[:-1],
@@ -152,7 +146,7 @@ def test_resampling_rejects_incomplete_gap_misalignment_and_downsampling(app_con
         end_time=base.candles[-2].close_time,
     )
     with pytest.raises(HistoricalDataError, match="insufficient"):
-        _resample(incomplete, Timeframe.M15, app_config)
+        _resample(incomplete, base_manifest, Timeframe.M15, app_config)
 
     with pytest.raises(DomainValidationError, match="gap-free"):
         replace(
@@ -179,15 +173,17 @@ def test_resampling_rejects_incomplete_gap_misalignment_and_downsampling(app_con
         end_time=shifted_candles[-1].close_time,
     )
     with pytest.raises(HistoricalDataError, match="misaligned"):
-        _resample(shifted, Timeframe.M15, app_config)
+        _resample(shifted, base_manifest, Timeframe.M15, app_config)
     with pytest.raises(HistoricalDataError, match="unsupported"):
-        _resample(_resample(base, Timeframe.M15, app_config).dataset, Timeframe.M5, app_config)
+        m15 = _resample(base, base_manifest, Timeframe.M15, app_config)
+        _resample(m15.dataset, m15.manifest, Timeframe.M5, app_config)
 
 
 def test_cross_timeframe_detects_native_payload_mismatch(app_config):
-    base = _ingest("valid_m5.csv", app_config).dataset
-    assert base is not None
-    m15 = _resample(base, Timeframe.M15, app_config).dataset
+    base_result = _ingest("valid_m5.csv", app_config)
+    base, base_manifest = base_result.dataset, base_result.manifest
+    assert base is not None and base_manifest is not None
+    m15 = _resample(base, base_manifest, Timeframe.M15, app_config).dataset
     changed = (replace(m15.candles[0], close=m15.candles[0].close + 1), *m15.candles[1:])
     result = validate_cross_timeframe(base.candles, changed)
     assert not result.is_consistent
@@ -202,12 +198,8 @@ def test_manifest_identity_is_path_independent_and_content_sensitive(tmp_path, a
     right.parent.mkdir()
     left.write_bytes(source)
     right.write_bytes(source)
-    first = ingest_csv_files(
-        (left,), app_config.historical, config_version="config-v1", code_version="code-v1"
-    )
-    second = ingest_csv_files(
-        (right,), app_config.historical, config_version="config-v1", code_version="code-v1"
-    )
+    first = ingest_csv_files((left,), app_config.historical)
+    second = ingest_csv_files((right,), app_config.historical)
     assert first.dataset is not None and second.dataset is not None
     assert first.dataset.dataset_id == second.dataset.dataset_id
     assert first.dataset.data_version == second.dataset.data_version
@@ -215,8 +207,6 @@ def test_manifest_identity_is_path_independent_and_content_sensitive(tmp_path, a
 
     corrected = tmp_path / "corrected.csv"
     corrected.write_bytes(source.replace(b",112,21,", b",112.5,21,"))
-    changed = ingest_csv_files(
-        (corrected,), app_config.historical, config_version="config-v1", code_version="code-v1"
-    )
+    changed = ingest_csv_files((corrected,), app_config.historical)
     assert changed.dataset is not None
     assert changed.dataset.data_version != first.dataset.data_version

@@ -24,9 +24,12 @@ Merge order: `base.yaml` → environment overlay → environment variables chỉ
 secret/explicit safety switch. Unknown key là validation error. Deep merge chỉ theo
 object key; list được replace toàn bộ, không nối ngầm.
 
-`config_version = sha256(canonical_merged_config_without_secrets)`. Canonical form
+`app_config_version = sha256(canonical_merged_config_without_secrets)` (the existing
+`VersionSet.config_version`). Canonical form
 sort key, giữ Decimal dưới dạng string và normalize duration/timeframe. Secrets không
-đi vào hash, log hoặc journal.
+đi vào hash, log hoặc journal. Historical dataset identity uses the narrower
+`historical_semantics_version` documented in `historical-data.md`; strategy/risk
+changes must not churn data versions.
 
 ## 3. Top-level schema
 
@@ -286,7 +289,7 @@ không tạo key execution khác cùng semantics.
 | `historical.canonical_timeframe` | `Timeframe` | DEFAULT_FOR_DEVELOPMENT | Must be `5m`; M15/H1 derived |
 | `historical.parser_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; semantic change changes data version |
 | `historical.normalization_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; semantic change changes data version |
-| `historical.resampling_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; semantic change changes data version |
+| `historical.resampling_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty; changes derived M15/H1 versions, not canonical M5 |
 
 ### 4.12 `journal`
 
@@ -350,7 +353,8 @@ không tạo key execution khác cùng semantics.
     tự lấy “best practice” làm default.
 15. Historical parser assumptions phải explicit; mappings/schema đúng exact registry;
     base timeframe là M5; conflict/gap policy đều `FAIL`; path/mtime không tham gia
-    data identity.
+    data identity. Full app config hash không tham gia historical identity; resampling
+    version chỉ tham gia identity của derived timeframe.
 
 Bất kỳ field hoặc cross-field rule nào fail đều phát `CONFIG_INVALID`, giữ global state
 ở `HALTED` và không khởi tạo execution/provider side effect.

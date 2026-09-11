@@ -13,23 +13,17 @@ FIXTURE = Path("tests/fixtures/historical/valid_m5.csv")
 
 
 def _ingest(path, app_config):
-    result = ingest_csv_files(
-        (path,), app_config.historical, config_version="config-v1", code_version="code-v1"
-    )
+    result = ingest_csv_files((path,), app_config.historical)
     assert result.dataset is not None and result.manifest is not None
     return result
 
 
-def _derive(dataset, timeframe, app_config, hashes):
+def _derive(dataset, manifest, timeframe, app_config, *, algorithm_version=None):
     return resample_dataset(
         dataset,
+        manifest,
         timeframe,
-        algorithm_version=app_config.historical.resampling_version,
-        source_content_hashes=hashes,
-        parser_version=app_config.historical.parser_version,
-        normalization_version=app_config.historical.normalization_version,
-        code_version="code-v1",
-        config_version="config-v1",
+        algorithm_version=algorithm_version or app_config.historical.resampling_version,
     )
 
 
@@ -103,8 +97,7 @@ def test_future_version_append_cannot_change_old_point_in_time_query(tmp_path, a
 
 def test_h1_incomplete_interval_is_excluded_by_point_in_time_query(tmp_path, app_config):
     ingested = _ingest(FIXTURE, app_config)
-    hashes = ingested.manifest.source_content_hashes
-    h1 = _derive(ingested.dataset, Timeframe.H1, app_config, hashes)
+    h1 = _derive(ingested.dataset, ingested.manifest, Timeframe.H1, app_config)
     repository = SQLiteHistoricalCandleRepository(tmp_path / "historical.db")
     try:
         repository.append_dataset(h1.dataset, h1.manifest)
@@ -122,5 +115,51 @@ def test_h1_incomplete_interval_is_excluded_by_point_in_time_query(tmp_path, app
             1,
             h1.dataset.data_version,
         ) == (h1.dataset.candles[0],)
+    finally:
+        repository.close()
+
+
+def test_multiple_resampling_versions_coexist_and_require_explicit_query_version(
+    tmp_path, app_config
+):
+    ingested = _ingest(FIXTURE, app_config)
+    m15_v1 = _derive(
+        ingested.dataset,
+        ingested.manifest,
+        Timeframe.M15,
+        app_config,
+        algorithm_version="resample-v1",
+    )
+    m15_v2 = _derive(
+        ingested.dataset,
+        ingested.manifest,
+        Timeframe.M15,
+        app_config,
+        algorithm_version="resample-v2",
+    )
+    assert m15_v1.dataset.data_version != m15_v2.dataset.data_version
+
+    repository = SQLiteHistoricalCandleRepository(tmp_path / "coexisting-versions.db")
+    try:
+        repository.append_dataset(m15_v1.dataset, m15_v1.manifest)
+        repository.append_dataset(m15_v2.dataset, m15_v2.manifest)
+        first = repository.latest_before(
+            m15_v1.dataset.symbol,
+            Timeframe.M15,
+            m15_v1.dataset.end_time,
+            m15_v1.dataset.candle_count,
+            m15_v1.dataset.data_version,
+        )
+        second = repository.latest_before(
+            m15_v2.dataset.symbol,
+            Timeframe.M15,
+            m15_v2.dataset.end_time,
+            m15_v2.dataset.candle_count,
+            m15_v2.dataset.data_version,
+        )
+        assert first == m15_v1.dataset.candles
+        assert second == m15_v2.dataset.candles
+        assert {candle.data_version for candle in first} == {m15_v1.dataset.data_version}
+        assert {candle.data_version for candle in second} == {m15_v2.dataset.data_version}
     finally:
         repository.close()

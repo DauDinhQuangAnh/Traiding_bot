@@ -1,14 +1,14 @@
 {
   "candle_count": 12,
-  "canonical_hash": "004fcbc6a3c585207a20b6bf41bd303bfacbafde2a208264eba101f9a540bcf8",
-  "data_version": "6336a15f8c4ba7ca9b833d221ecf7a7e234dd96078f3382c8773a4fe5e7e2888",
-  "dataset_bytes_sha256": "88fe9ce01098dcc26e15914496bbca4fbe41243afecb2abf17a48bf50ec8010e",
-  "dataset_id": "3b27f3548f82ffd3ceb4cbda951c72b2e4d8143070825d4c78f96d7111ac17fa",
+  "canonical_hash": "30f4797f5c66feb836f8f7a5c5a66e4e60491ce174f23b13b9d44d7aa9a44c8e",
+  "data_version": "d115846e10022149855994b293ac71cbf6a5d9a2f7b0d41ef144c43d17f38a21",
+  "dataset_bytes_sha256": "64195ed061238527b9bc5ae74f068c3f12c8bf3064e51007a99c08a842071a36",
+  "dataset_id": "b75275c57e9d1b10071e83ef0bf7ab36fa001b35b1ac05222480953bd3dc98cd",
   "first_candle": {
-    "candle_id": "5719059e0ffd3b0582964c6ed92cc6768e47a5e031467741f714907e3f49e19e",
+    "candle_id": "ef802420aabc189dee85cf8cd6c9e7ec73a100a455a1cfc95c089b3e9464e689",
     "close": "101",
     "close_time": "2026-01-01T00:05:00.000000Z",
-    "data_version": "6336a15f8c4ba7ca9b833d221ecf7a7e234dd96078f3382c8773a4fe5e7e2888",
+    "data_version": "d115846e10022149855994b293ac71cbf6a5d9a2f7b0d41ef144c43d17f38a21",
     "event_time": "2026-01-01T00:05:00.000000Z",
     "high": "102",
     "is_closed": true,
@@ -22,10 +22,10 @@
     "volume": "10"
   },
   "last_candle": {
-    "candle_id": "75d407897c72dfa05f861eb641abf102875111817304ea917679395d89c03d84",
+    "candle_id": "f636d7f8c905987b01e7b62adaeb3f478126851c6835f1ff0760f4c50434523e",
     "close": "112",
     "close_time": "2026-01-01T01:00:00.000000Z",
-    "data_version": "6336a15f8c4ba7ca9b833d221ecf7a7e234dd96078f3382c8773a4fe5e7e2888",
+    "data_version": "d115846e10022149855994b293ac71cbf6a5d9a2f7b0d41ef144c43d17f38a21",
     "event_time": "2026-01-01T01:00:00.000000Z",
     "high": "113",
     "is_closed": true,
@@ -38,6 +38,9 @@
     "timeframe": "5m",
     "volume": "21"
   },
-  "manifest_bytes_sha256": "50e544c09a38120bb6847ab9314c66e6e312976909f487c153dc528ddef1ecaa",
-  "manifest_id": "74862ebe99ce2b9621bf8706767230fbbb3789a9e2c8ea417ef3ffaa55a459c7"
+  "manifest_bytes_sha256": "245902ce3d457591a3c48d4a5a3ca6fbaa13b12c2e173173b86071f4d4dff040",
+  "manifest_id": "ae43db035b5c346e72943077fe9248fef30938a44e51630181c5142fd31eda29",
+  "manifest_version": "historical-manifest-v2",
+  "raw_data_version": "f3d73c5232613e49ce4f45a1876cbe8e547396c9a033cf18f38c7ff9a13ccc3b",
+  "historical_semantics_version": "45f23166d2cb076950262135edcf9a3c8ce24d79ec3871e18731aa5b37ca3775"
 }

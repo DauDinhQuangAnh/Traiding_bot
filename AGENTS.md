@@ -1,8 +1,9 @@
 # Repository guidance
 
 - Last approved phase: PHASE 3 offline core. PHASE 4 historical-data implementation is
-  under human review and remains `NEEDS_WORK` until the Python 3.12 CI run is green.
-  Do not start PHASE 5 without explicit human approval after that gate.
+  under remediation review. Python 3.12 CI passed for baseline `635303d`; the version
+  identity remediation remains `NEEDS_WORK` until its own CI run is green. Do not
+  start PHASE 5 without explicit human approval after that gate.
 - Source of truth: `README.md` and the approved documents under `docs/`, especially
   `technical-specification.md`, `domain-models.md`, `configuration.md`,
   `market-data.md`, `regime-detection.md`, `strategy.md`, `position-sizing.md`, and

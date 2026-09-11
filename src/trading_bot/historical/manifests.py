@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from trading_bot.config.models import HistoricalConfig
+from trading_bot.domain.enums import Timeframe
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.primitives import canonical_json
 
@@ -19,7 +20,7 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 
 
 def historical_semantics(config: HistoricalConfig) -> dict[str, object]:
-    """Return only content semantics; physical path and ingestion time are excluded."""
+    """Return raw-to-canonical semantics; app and resampling config are excluded."""
     return {
         "raw_format": config.raw_format,
         "source_name": config.source_name,
@@ -34,18 +35,37 @@ def historical_semantics(config: HistoricalConfig) -> dict[str, object]:
         "canonical_timeframe": config.canonical_timeframe,
         "parser_version": config.parser_version,
         "normalization_version": config.normalization_version,
-        "resampling_version": config.resampling_version,
     }
 
 
-def historical_data_version(
-    source_content_hashes: tuple[str, ...], config: HistoricalConfig, config_version: str
+def historical_semantics_version(config: HistoricalConfig) -> str:
+    return deterministic_id("historical-semantics-v1", historical_semantics(config))
+
+
+def raw_data_version(source_content_hashes: tuple[str, ...]) -> str:
+    return deterministic_id("historical-raw-source-v1", tuple(sorted(source_content_hashes)))
+
+
+def historical_data_version(source_content_hashes: tuple[str, ...], semantics_version: str) -> str:
+    return deterministic_id(
+        "canonical-historical-data-v1",
+        raw_data_version(source_content_hashes),
+        semantics_version,
+    )
+
+
+def derived_data_version(
+    source_data_version: str,
+    source_timeframe: Timeframe,
+    target_timeframe: Timeframe,
+    algorithm_version: str,
 ) -> str:
     return deterministic_id(
-        "historical-data-version",
-        tuple(sorted(source_content_hashes)),
-        historical_semantics(config),
-        config_version,
+        "derived-historical-data-v1",
+        source_data_version,
+        source_timeframe,
+        target_timeframe,
+        algorithm_version,
     )
 
 

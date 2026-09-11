@@ -17,12 +17,16 @@ from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.market_models import Candle
 from trading_bot.historical.manifests import (
     canonical_candle_hash,
+    derived_data_version,
     historical_data_version,
+    historical_semantics_version,
+    raw_data_version,
     sha256_file,
 )
 from trading_bot.historical.models import (
     DataQualityReport,
     DatasetManifest,
+    DerivedDatasetLineage,
     DerivedDatasetResult,
     Gap,
     HistoricalDataset,
@@ -44,7 +48,7 @@ _ALLOWED_RESAMPLING = {
     (Timeframe.M5, Timeframe.H1),
     (Timeframe.M15, Timeframe.H1),
 }
-_MANIFEST_VERSION = "historical-manifest-v1"
+_MANIFEST_VERSION = "historical-manifest-v2"
 
 
 def _manifest_and_dataset(
@@ -53,11 +57,11 @@ def _manifest_and_dataset(
     source: str,
     source_content_hashes: tuple[str, ...],
     data_version: str,
+    historical_semantics_version: str,
     parser_version: str,
     normalization_version: str,
-    resampling_version: str,
-    code_version: str,
-    config_version: str,
+    resampling_version: str | None,
+    lineage: DerivedDatasetLineage | None = None,
     rejection_count: int = 0,
     exact_duplicate_count: int = 0,
     conflict_count: int = 0,
@@ -77,12 +81,13 @@ def _manifest_and_dataset(
         candles[0].symbol,
         candles[0].timeframe,
         source_content_hashes,
+        raw_data_version(source_content_hashes),
+        historical_semantics_version,
         parser_version,
         normalization_version,
         resampling_version,
-        code_version,
-        config_version,
         data_version,
+        lineage,
         len(candles),
         candles[0].open_time,
         candles[-1].close_time,
@@ -94,26 +99,27 @@ def _manifest_and_dataset(
     )
     manifest_id = deterministic_id("historical-manifest", manifest_fields)
     manifest = DatasetManifest(
-        _MANIFEST_VERSION,
-        manifest_id,
-        dataset_id,
-        candles[0].symbol,
-        candles[0].timeframe,
-        source_content_hashes,
-        parser_version,
-        normalization_version,
-        resampling_version,
-        code_version,
-        config_version,
-        data_version,
-        len(candles),
-        candles[0].open_time,
-        candles[-1].close_time,
-        rejection_count,
-        exact_duplicate_count,
-        conflict_count,
-        gap_count,
-        canonical_hash,
+        manifest_version=_MANIFEST_VERSION,
+        manifest_id=manifest_id,
+        dataset_id=dataset_id,
+        symbol=candles[0].symbol,
+        timeframe=candles[0].timeframe,
+        source_content_hashes=source_content_hashes,
+        raw_data_version=raw_data_version(source_content_hashes),
+        historical_semantics_version=historical_semantics_version,
+        parser_version=parser_version,
+        normalization_version=normalization_version,
+        resampling_version=resampling_version,
+        data_version=data_version,
+        lineage=lineage,
+        candle_count=len(candles),
+        first_open_time=candles[0].open_time,
+        last_close_time=candles[-1].close_time,
+        rejection_count=rejection_count,
+        exact_duplicate_count=exact_duplicate_count,
+        conflict_count=conflict_count,
+        gap_count=gap_count,
+        canonical_hash=canonical_hash,
     )
     dataset = HistoricalDataset(
         dataset_id,
@@ -128,7 +134,6 @@ def _manifest_and_dataset(
         manifest_id,
         gap_count,
         conflict_count,
-        code_version,
         HistoricalDatasetStatus.VALID,
         gap_count == 0 and conflict_count == 0,
     )
@@ -170,10 +175,8 @@ def _failed_report(
 def ingest_csv_files(
     paths: tuple[Path, ...],
     config: HistoricalConfig,
-    *,
-    config_version: str,
-    code_version: str,
 ) -> HistoricalIngestionResult:
+    semantics_version = historical_semantics_version(config)
     parser = CsvHistoricalDataParser(config.column_mapping)
     raw_records: list[RawHistoricalRecord] = []
     content_hashes: list[str] = []
@@ -187,7 +190,7 @@ def ingest_csv_files(
             raw_records.extend(records)
     except (HistoricalParserError, OSError) as error:
         failed_version = deterministic_id(
-            "historical-ingestion-failed", config_version, code_version, str(error)
+            "historical-ingestion-failed", semantics_version, str(error)
         )
         rejection = HistoricalRejection(None, "", None, (ReasonCode.DATA_MISSING,), str(error))
         report = _failed_report(failed_version, len(raw_records), 0, 1, rejection.reason_codes)
@@ -195,7 +198,7 @@ def ingest_csv_files(
             HistoricalIngestionStatus.FAILED, None, None, report, (rejection,)
         )
     if not raw_records:
-        version = deterministic_id("historical-empty", config_version, code_version)
+        version = deterministic_id("historical-empty", semantics_version)
         rejection = HistoricalRejection(
             None, "", None, (ReasonCode.DATA_MISSING,), "historical input has no records"
         )
@@ -207,7 +210,7 @@ def ingest_csv_files(
             (rejection,),
         )
     hashes = tuple(sorted(content_hashes))
-    data_version = historical_data_version(hashes, config, config_version)
+    data_version = historical_data_version(hashes, semantics_version)
     normalized = tuple(normalize_record(record, config, data_version) for record in raw_records)
     rejections = tuple(
         HistoricalRejection(
@@ -288,11 +291,10 @@ def ingest_csv_files(
         source=config.source_name,
         source_content_hashes=hashes,
         data_version=data_version,
+        historical_semantics_version=semantics_version,
         parser_version=config.parser_version,
         normalization_version=config.normalization_version,
-        resampling_version=config.resampling_version,
-        code_version=code_version,
-        config_version=config_version,
+        resampling_version=None,
         exact_duplicate_count=deduped.exact_duplicate_count,
     )
     return HistoricalIngestionResult(
@@ -302,15 +304,17 @@ def ingest_csv_files(
 
 def resample_dataset(
     source: HistoricalDataset,
+    source_manifest: DatasetManifest,
     target_timeframe: Timeframe,
     *,
     algorithm_version: str,
-    source_content_hashes: tuple[str, ...],
-    parser_version: str,
-    normalization_version: str,
-    code_version: str,
-    config_version: str,
 ) -> DerivedDatasetResult:
+    if (
+        source_manifest.dataset_id != source.dataset_id
+        or source_manifest.data_version != source.data_version
+        or source_manifest.timeframe is not source.timeframe
+    ):
+        raise HistoricalDataError("source dataset and manifest lineage do not match")
     relationship = (source.timeframe, target_timeframe)
     if relationship not in _ALLOWED_RESAMPLING:
         raise HistoricalDataError("unsupported or downward resampling relationship")
@@ -325,6 +329,12 @@ def resample_dataset(
         raise HistoricalDataError("source begins on a misaligned target boundary")
     if len(source.candles) % child_count:
         raise HistoricalDataError("insufficient child candles for complete resampling")
+    output_data_version = derived_data_version(
+        source.data_version,
+        source.timeframe,
+        target_timeframe,
+        algorithm_version,
+    )
     derived: list[Candle] = []
     for offset in range(0, len(source.candles), child_count):
         group = source.candles[offset : offset + child_count]
@@ -344,6 +354,7 @@ def resample_dataset(
                     target_timeframe,
                     algorithm_version,
                     source.data_version,
+                    output_data_version,
                 ),
                 source.symbol,
                 target_timeframe,
@@ -358,18 +369,24 @@ def resample_dataset(
                 sum((candle.volume for candle in group), start=group[0].volume * 0),
                 True,
                 source_name,
-                source.data_version,
+                output_data_version,
             )
         )
     dataset, manifest = _manifest_and_dataset(
         tuple(derived),
         source=f"derived:{source.timeframe.value}->{target_timeframe.value}",
-        source_content_hashes=source_content_hashes,
-        data_version=source.data_version,
-        parser_version=parser_version,
-        normalization_version=normalization_version,
+        source_content_hashes=source_manifest.source_content_hashes,
+        data_version=output_data_version,
+        historical_semantics_version=source_manifest.historical_semantics_version,
+        parser_version=source_manifest.parser_version,
+        normalization_version=source_manifest.normalization_version,
         resampling_version=algorithm_version,
-        code_version=code_version,
-        config_version=config_version,
+        lineage=DerivedDatasetLineage(
+            source.dataset_id,
+            source.data_version,
+            source.timeframe,
+            target_timeframe,
+            algorithm_version,
+        ),
     )
     return DerivedDatasetResult(dataset, manifest)

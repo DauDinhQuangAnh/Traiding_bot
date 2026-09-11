@@ -94,7 +94,13 @@ class SQLiteHistoricalCandleRepository:
         self._connection.close()
 
     def append_dataset(self, dataset: HistoricalDataset, manifest: DatasetManifest) -> None:
-        if not dataset.is_backtest_eligible or manifest.dataset_id != dataset.dataset_id:
+        if not dataset.is_backtest_eligible or (
+            manifest.dataset_id != dataset.dataset_id
+            or manifest.manifest_id != dataset.manifest_id
+            or manifest.data_version != dataset.data_version
+            or manifest.symbol != dataset.symbol
+            or manifest.timeframe is not dataset.timeframe
+        ):
             raise HistoricalDataError("only matching backtest-eligible datasets can be appended")
         dataset_json = canonical_json(dataset)
         manifest_json = canonical_json(manifest)

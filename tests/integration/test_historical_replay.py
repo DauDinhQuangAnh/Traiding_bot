@@ -9,6 +9,7 @@ from trading_bot.domain.enums import Timeframe
 from trading_bot.domain.primitives import canonical_json
 from trading_bot.domain.value_objects import CostRateEstimate
 from trading_bot.historical.dataset import ingest_csv_files, resample_dataset
+from trading_bot.historical.models import HistoricalVersionSet
 from trading_bot.historical.repository import SQLiteHistoricalCandleRepository
 
 
@@ -37,26 +38,26 @@ def _csv_text(count: int, *, corrected_index: int | None = None) -> str:
     return "\n".join(rows) + "\n"
 
 
-def _ingest_bundle(path, app_config, versions):
+def _ingest_bundle(path, app_config):
     ingestion = ingest_csv_files(
         (path,),
         app_config.historical,
-        config_version=versions.config_version,
-        code_version=versions.code_version,
     )
     assert ingestion.dataset is not None and ingestion.manifest is not None
     base = ingestion.dataset
-    common = {
-        "algorithm_version": app_config.historical.resampling_version,
-        "source_content_hashes": ingestion.manifest.source_content_hashes,
-        "parser_version": app_config.historical.parser_version,
-        "normalization_version": app_config.historical.normalization_version,
-        "code_version": versions.code_version,
-        "config_version": versions.config_version,
-    }
-    m15 = resample_dataset(base, Timeframe.M15, **common)
-    h1 = resample_dataset(base, Timeframe.H1, **common)
+    common = {"algorithm_version": app_config.historical.resampling_version}
+    m15 = resample_dataset(base, ingestion.manifest, Timeframe.M15, **common)
+    h1 = resample_dataset(base, ingestion.manifest, Timeframe.H1, **common)
     return ingestion, m15, h1
+
+
+def _version_set(bundle):
+    ingestion, m15, h1 = bundle
+    return HistoricalVersionSet(
+        ingestion.dataset.data_version,
+        m15.dataset.data_version,
+        h1.dataset.data_version,
+    )
 
 
 def _persist_bundle(repository, bundle):
@@ -71,16 +72,26 @@ def _replay(repository, bundle, app_config, versions, *, cutoff=None):
     dataset = ingestion.dataset
     end = cutoff or dataset.end_time
     start = end - timedelta(minutes=30)
+    version_set = _version_set(bundle)
     snapshots = build_historical_snapshot_sequence(
         repository,
         dataset.symbol,
-        dataset.data_version,
+        version_set,
         start,
         end,
         app_config,
         versions,
     )
     assert snapshots.snapshots and not snapshots.failures
+    assert snapshots.version_set == version_set
+    assert all(
+        snapshot.data_version == version_set.snapshot_data_version
+        and {candle.data_version for candle in snapshot.candles_5m} == {version_set.m5_data_version}
+        and {candle.data_version for candle in snapshot.candles_15m}
+        == {version_set.m15_data_version}
+        and {candle.data_version for candle in snapshot.candles_1h} == {version_set.h1_data_version}
+        for snapshot in snapshots.snapshots
+    )
     costs = CostRateEstimate(*(Decimal("0") for _ in range(7)), model_version="historical-v1")
     return snapshots, replay_historical_sequence(snapshots, app_config, versions, costs)
 
@@ -90,7 +101,7 @@ def test_snapshot_builder_reports_insufficient_warmup_without_future_fill(
 ):
     source = tmp_path / "short.csv"
     source.write_text(_csv_text(12), encoding="utf-8")
-    bundle = _ingest_bundle(source, app_config, versions)
+    bundle = _ingest_bundle(source, app_config)
     repository = SQLiteHistoricalCandleRepository(tmp_path / "short.db")
     try:
         _persist_bundle(repository, bundle)
@@ -98,7 +109,7 @@ def test_snapshot_builder_reports_insufficient_warmup_without_future_fill(
         result = build_historical_snapshot_sequence(
             repository,
             dataset.symbol,
-            dataset.data_version,
+            _version_set(bundle),
             dataset.start_time,
             dataset.end_time,
             app_config,
@@ -119,8 +130,8 @@ def test_raw_to_storage_rebuild_to_phase3_replay_is_byte_equivalent(tmp_path, ap
     content = _csv_text(2664)
     source_a.write_text(content, encoding="utf-8")
     source_b.write_text(content, encoding="utf-8")
-    first_bundle = _ingest_bundle(source_a, app_config, versions)
-    second_bundle = _ingest_bundle(source_b, app_config, versions)
+    first_bundle = _ingest_bundle(source_a, app_config)
+    second_bundle = _ingest_bundle(source_b, app_config)
 
     first_repository = SQLiteHistoricalCandleRepository(tmp_path / "first.db")
     second_repository = SQLiteHistoricalCandleRepository(tmp_path / "second.db")
@@ -167,9 +178,9 @@ def test_future_append_and_correction_preserve_old_point_in_time_replay(
     original_path.write_text(_csv_text(2664), encoding="utf-8")
     future_path.write_text(_csv_text(2676), encoding="utf-8")
     corrected_path.write_text(_csv_text(2676, corrected_index=100), encoding="utf-8")
-    original = _ingest_bundle(original_path, app_config, versions)
-    future = _ingest_bundle(future_path, app_config, versions)
-    corrected = _ingest_bundle(corrected_path, app_config, versions)
+    original = _ingest_bundle(original_path, app_config)
+    future = _ingest_bundle(future_path, app_config)
+    corrected = _ingest_bundle(corrected_path, app_config)
     assert (
         len(
             {
@@ -186,6 +197,13 @@ def test_future_append_and_correction_preserve_old_point_in_time_replay(
         _persist_bundle(repository, original)
         cutoff = original[0].dataset.end_time
         before = _replay(repository, original, app_config, versions, cutoff=cutoff)
+        alternative_m15 = resample_dataset(
+            original[0].dataset,
+            original[0].manifest,
+            Timeframe.M15,
+            algorithm_version="ohlcv-resample-v2",
+        )
+        repository.append_dataset(alternative_m15.dataset, alternative_m15.manifest)
         _persist_bundle(repository, future)
         _persist_bundle(repository, corrected)
         after = _replay(repository, original, app_config, versions, cutoff=cutoff)

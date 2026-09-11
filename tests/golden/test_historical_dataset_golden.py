@@ -14,8 +14,6 @@ def test_valid_m5_dataset_matches_reviewed_golden_artifact(app_config):
     result = ingest_csv_files(
         (FIXTURES / "valid_m5.csv",),
         app_config.historical,
-        config_version="config-v1",
-        code_version="code-v1",
     )
     assert result.dataset is not None and result.manifest is not None
     dataset, manifest = result.dataset, result.manifest
@@ -29,5 +27,8 @@ def test_valid_m5_dataset_matches_reviewed_golden_artifact(app_config):
         "last_candle": canonical_data(dataset.candles[-1]),
         "manifest_bytes_sha256": sha256(canonical_manifest_bytes(manifest)).hexdigest(),
         "manifest_id": manifest.manifest_id,
+        "manifest_version": manifest.manifest_version,
+        "raw_data_version": manifest.raw_data_version,
+        "historical_semantics_version": manifest.historical_semantics_version,
     }
     assert actual == expected

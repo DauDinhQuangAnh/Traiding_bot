@@ -50,7 +50,8 @@ API key, network I/O, order submission, trading loop và live trading vẫn ngo�
 - [Implementation plan](docs/phase-4-plan.md)
 - [Historical data contract](docs/historical-data.md)
 - [Acceptance review](docs/phase-4-review.md)
-- The offline implementation is complete, but the last approved phase remains PHASE 3
-  until the new commit passes the existing Python 3.12 GitHub Actions workflow.
+- Python 3.12 CI passed for baseline `635303d`. Historical version-identity
+  remediation is under review; the last approved phase remains PHASE 3 until the
+  remediation commit passes the same workflow and receives human approval.
 - No production historical dataset, exchange client, network I/O, strategy calibration,
   or PHASE 5 backtest engine is included.

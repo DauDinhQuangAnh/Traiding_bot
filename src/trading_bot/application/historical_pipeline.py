@@ -9,7 +9,7 @@ from trading_bot.application.pipeline import EvaluationResult, replay_market_seq
 from trading_bot.config.models import AppConfig, required_bars
 from trading_bot.domain.enums import Timeframe
 from trading_bot.domain.value_objects import CostRateEstimate, VersionSet
-from trading_bot.historical.models import SnapshotSequenceResult
+from trading_bot.historical.models import HistoricalVersionSet, SnapshotSequenceResult
 from trading_bot.historical.repository import HistoricalCandleRepository
 from trading_bot.market_data.validation import build_market_snapshot
 
@@ -17,15 +17,21 @@ from trading_bot.market_data.validation import build_market_snapshot
 def build_historical_snapshot_sequence(
     repository: HistoricalCandleRepository,
     symbol: str,
-    data_version: str,
+    version_set: HistoricalVersionSet,
     start: datetime,
     end: datetime,
     config: AppConfig,
     versions: VersionSet,
 ) -> SnapshotSequenceResult:
     needs = required_bars(config.indicators, config.levels)
-    triggers = repository.get_candles(symbol, Timeframe.M15, start, end, data_version)
-    historical_versions = replace(versions, data_version=data_version)
+    triggers = repository.get_candles(
+        symbol,
+        Timeframe.M15,
+        start,
+        end,
+        version_set.m15_data_version,
+    )
+    historical_versions = replace(versions, data_version=version_set.snapshot_data_version)
     snapshots = []
     failures = []
     skipped = 0
@@ -38,7 +44,7 @@ def build_historical_snapshot_sequence(
                     timeframe,
                     as_of,
                     needs[timeframe],
-                    data_version,
+                    version_set.for_timeframe(timeframe),
                 )
             )
             for timeframe in Timeframe
@@ -61,7 +67,7 @@ def build_historical_snapshot_sequence(
             failures.append((as_of, build.reason_codes, build.detail))
         else:
             snapshots.append(build.snapshot)
-    return SnapshotSequenceResult(tuple(snapshots), skipped, tuple(failures))
+    return SnapshotSequenceResult(tuple(snapshots), skipped, tuple(failures), version_set)
 
 
 def replay_historical_sequence(
@@ -72,5 +78,8 @@ def replay_historical_sequence(
 ) -> tuple[EvaluationResult, ...]:
     if not snapshots.snapshots:
         return ()
-    historical_versions = replace(versions, data_version=snapshots.snapshots[0].data_version)
+    historical_versions = replace(
+        versions,
+        data_version=snapshots.version_set.snapshot_data_version,
+    )
     return replay_market_sequence(snapshots.snapshots, config, historical_versions, costs)

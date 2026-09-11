@@ -14,6 +14,7 @@ from trading_bot.domain.enums import (
     Timeframe,
 )
 from trading_bot.domain.errors import DomainValidationError
+from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.market_models import Candle, MarketSnapshot
 from trading_bot.domain.primitives import require_non_empty, require_utc
 
@@ -130,6 +131,25 @@ class DataQualityReport:
 
 
 @dataclass(frozen=True, slots=True)
+class DerivedDatasetLineage:
+    source_dataset_id: str
+    source_data_version: str
+    source_timeframe: Timeframe
+    target_timeframe: Timeframe
+    resampling_version: str
+
+    def __post_init__(self) -> None:
+        for name in ("source_dataset_id", "source_data_version", "resampling_version"):
+            require_non_empty(getattr(self, name), name)
+        if (self.source_timeframe, self.target_timeframe) not in {
+            (Timeframe.M5, Timeframe.M15),
+            (Timeframe.M5, Timeframe.H1),
+            (Timeframe.M15, Timeframe.H1),
+        }:
+            raise DomainValidationError("derived lineage requires supported upward timeframes")
+
+
+@dataclass(frozen=True, slots=True)
 class DatasetManifest:
     manifest_version: str
     manifest_id: str
@@ -137,12 +157,13 @@ class DatasetManifest:
     symbol: str
     timeframe: Timeframe
     source_content_hashes: tuple[str, ...]
+    raw_data_version: str
+    historical_semantics_version: str
     parser_version: str
     normalization_version: str
-    resampling_version: str
-    code_version: str
-    config_version: str
+    resampling_version: str | None
     data_version: str
+    lineage: DerivedDatasetLineage | None
     candle_count: int
     first_open_time: datetime
     last_close_time: datetime
@@ -158,17 +179,25 @@ class DatasetManifest:
             "manifest_id",
             "dataset_id",
             "symbol",
+            "raw_data_version",
+            "historical_semantics_version",
             "parser_version",
             "normalization_version",
-            "resampling_version",
-            "code_version",
-            "config_version",
             "data_version",
             "canonical_hash",
         ):
             require_non_empty(getattr(self, name), name)
         if self.candle_count <= 0 or not self.source_content_hashes:
             raise DomainValidationError("manifest requires candles and source hashes")
+        if any(not content_hash for content_hash in self.source_content_hashes):
+            raise DomainValidationError("manifest source hashes must be non-empty")
+        if self.lineage is None and self.resampling_version is not None:
+            raise DomainValidationError("canonical manifest cannot have resampling semantics")
+        if self.lineage is not None and (
+            self.resampling_version != self.lineage.resampling_version
+            or self.timeframe is not self.lineage.target_timeframe
+        ):
+            raise DomainValidationError("derived manifest lineage/version mismatch")
         require_utc(self.first_open_time, "first_open_time")
         require_utc(self.last_close_time, "last_close_time")
 
@@ -187,7 +216,6 @@ class HistoricalDataset:
     manifest_id: str
     gap_count: int
     conflict_count: int
-    created_by_version: str
     status: HistoricalDatasetStatus
     is_backtest_eligible: bool
 
@@ -198,7 +226,6 @@ class HistoricalDataset:
             "source",
             "data_version",
             "manifest_id",
-            "created_by_version",
         ):
             require_non_empty(getattr(self, name), name)
         require_utc(self.start_time, "start_time")
@@ -261,7 +288,44 @@ class DerivedDatasetResult:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoricalVersionSet:
+    m5_data_version: str
+    m15_data_version: str
+    h1_data_version: str
+
+    def __post_init__(self) -> None:
+        for name in ("m5_data_version", "m15_data_version", "h1_data_version"):
+            require_non_empty(getattr(self, name), name)
+
+    def for_timeframe(self, timeframe: Timeframe) -> str:
+        return {
+            Timeframe.M5: self.m5_data_version,
+            Timeframe.M15: self.m15_data_version,
+            Timeframe.H1: self.h1_data_version,
+        }[timeframe]
+
+    @property
+    def snapshot_data_version(self) -> str:
+        return deterministic_id(
+            "historical-snapshot-data-v1",
+            self.m5_data_version,
+            self.m15_data_version,
+            self.h1_data_version,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SnapshotSequenceResult:
     snapshots: tuple[MarketSnapshot, ...]
     skipped_warmup: int
     failures: tuple[tuple[datetime, tuple[ReasonCode, ...], str | None], ...]
+    version_set: HistoricalVersionSet
+
+    def __post_init__(self) -> None:
+        if self.skipped_warmup < 0:
+            raise DomainValidationError("skipped_warmup must be non-negative")
+        if any(
+            snapshot.data_version != self.version_set.snapshot_data_version
+            for snapshot in self.snapshots
+        ):
+            raise DomainValidationError("snapshot sequence composite version mismatch")
