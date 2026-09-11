@@ -72,6 +72,7 @@ def test_entry_only_and_exit_only_fee_accounting(app_config):
             configured.execution,
             configured.risk,
             trade.cost_rate_estimate,
+            configured.calculation,
             current_notional=D("0"),
             available_margin=D("10000"),
             account_equity=D("10000"),

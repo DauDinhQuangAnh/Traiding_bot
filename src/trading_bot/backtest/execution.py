@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from trading_bot.backtest.costs import (
     adverse_market_fill,
@@ -14,7 +14,13 @@ from trading_bot.backtest.costs import (
     modeled_quote,
 )
 from trading_bot.backtest.models import BacktestOrderState, SimulatedFill
-from trading_bot.config.models import BacktestConfig, ExecutionConfig, RiskConfig
+from trading_bot.config.calculation import calculation_context
+from trading_bot.config.models import (
+    BacktestConfig,
+    CalculationConfig,
+    ExecutionConfig,
+    RiskConfig,
+)
 from trading_bot.domain.decision_models import TradeCandidate
 from trading_bot.domain.enums import (
     EntryModel,
@@ -114,6 +120,7 @@ def try_fill_entry(
     execution: ExecutionConfig,
     risk: RiskConfig,
     costs: CostRateEstimate,
+    calculation: CalculationConfig,
     *,
     current_notional: Decimal,
     available_margin: Decimal,
@@ -161,6 +168,53 @@ def try_fill_entry(
             (ReasonCode.APPROVAL_EXPIRED,),
             {},
         )
+    try:
+        with calculation_context(calculation):
+            fill = _entry_fill(order, bar, metadata, config)
+            if fill is None:
+                return EntryExecutionResult(order, None, order.status, (), {})
+            reasons, calculations = _validate_entry_fill(
+                candidate,
+                plan,
+                fill,
+                bar,
+                metadata,
+                config,
+                execution,
+                risk,
+                costs,
+                current_notional=current_notional,
+                available_margin=available_margin,
+                account_equity=account_equity,
+            )
+    except (DecimalException, ArithmeticError):
+        rejected = replace(order, status=OrderStatus.REJECTED)
+        return EntryExecutionResult(
+            rejected,
+            None,
+            rejected.status,
+            (ReasonCode.NUMERICAL_ERROR,),
+            {},
+        )
+    if reasons:
+        rejected = replace(order, status=OrderStatus.REJECTED)
+        return EntryExecutionResult(rejected, None, rejected.status, reasons, calculations)
+    filled = replace(
+        order,
+        filled_quantity=order.requested_quantity,
+        status=OrderStatus.FILLED,
+        filled_at=bar.open_time,
+    )
+    return EntryExecutionResult(filled, fill, filled.status, (), calculations)
+
+
+def _entry_fill(
+    order: BacktestOrderState,
+    bar: Candle,
+    metadata: InstrumentMetadata,
+    config: BacktestConfig,
+) -> SimulatedFill | None:
+    """Build the executable fill inside the configured Decimal calculation scope."""
     if order.order_type is OrderType.LIMIT:
         assert order.limit_price is not None
         touched = (
@@ -169,7 +223,7 @@ def try_fill_entry(
             else bar.high >= order.limit_price
         )
         if not touched:
-            return EntryExecutionResult(order, None, order.status, (), {})
+            return None
         reference = order.limit_price
         fill_price = order.limit_price
         role = LiquidityRole.TAKER
@@ -202,30 +256,7 @@ def try_fill_entry(
         metadata,
         config,
     )
-    reasons, calculations = _validate_entry_fill(
-        candidate,
-        plan,
-        fill,
-        bar,
-        metadata,
-        config,
-        execution,
-        risk,
-        costs,
-        current_notional=current_notional,
-        available_margin=available_margin,
-        account_equity=account_equity,
-    )
-    if reasons:
-        rejected = replace(order, status=OrderStatus.REJECTED)
-        return EntryExecutionResult(rejected, None, rejected.status, reasons, calculations)
-    filled = replace(
-        order,
-        filled_quantity=order.requested_quantity,
-        status=OrderStatus.FILLED,
-        filled_at=bar.open_time,
-    )
-    return EntryExecutionResult(filled, fill, filled.status, (), calculations)
+    return fill
 
 
 def _validate_entry_fill(

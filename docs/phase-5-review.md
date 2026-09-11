@@ -4,10 +4,12 @@
 
 `NEEDS_WORK`
 
-The original PHASE 5 baseline and its Python 3.12 workflow passed, and the four required
-remediations now pass all local gates. This document does not auto-approve PHASE 5:
-Python 3.12 GitHub Actions has not yet run for the remediation commit, and explicit human
-review is still required. PHASE 4 remains the last approved phase.
+The PHASE 5 safety-remediation baseline `1f2b59a` passed GitHub Actions Python 3.12
+(run #5, job `python-312`, SUCCESS). Final Decimal-context closure passes all local gates,
+but its exact commit has not been pushed or run remotely. All automated acceptance
+criteria through the pushed remediation baseline pass. This document does not
+auto-approve PHASE 5: exact-final-commit CI and explicit human review are still required.
+PHASE 4 remains the last approved phase.
 
 ## Evidence baseline
 
@@ -15,9 +17,11 @@ review is still required. PHASE 4 remains the last approved phase.
 - PHASE 5 plan/reconciliation commit: `0847af3`.
 - PHASE 5 implementation baseline: `5cd8a52`.
 - PHASE 5 acceptance-evidence baseline: `deb6d2d`; GitHub Actions Python 3.12 PASS.
+- PHASE 5 safety-remediation baseline: `1f2b59ac0df454fad483bbf13901d0879858f80c`;
+  GitHub Actions run #5, job `python-312`, SUCCESS.
 - Local interpreter: Python 3.11.9 at `D:\hoctap\python\python.exe`.
-- Remediation local gate result before commit: 180 tests passed with 85% total
-  branch-aware coverage. Critical PHASE 5 modules: engine 81%, execution 92%, portfolio
+- Final-remediation local gate result before commit: 188 tests passed with 85% total
+  branch-aware coverage. Critical PHASE 5 modules: engine 81%, execution 93%, portfolio
   88%, metrics 100%, models 92%, reports 100%, and versions 100%.
 - Critical implementation: `src/trading_bot/backtest/`,
   `src/trading_bot/application/backtest_pipeline.py`, and
@@ -35,9 +39,13 @@ review is still required. PHASE 4 remains the last approved phase.
 | Exposure denominator | PASS locally | Bar-close marking is separated from no-count revaluation; exact 5/10 exposure and no-position denominator regressions. |
 | Event chronology | PASS locally | Runtime append guard plus `BacktestResult` monotonic-time invariant; sequence tie-break for equal timestamp. |
 | Execution identity | PASS locally | Version includes explicit last-mile semantics, deviation/risk/cap inputs, funding-buffer count and Decimal policy; identity-change regressions. |
+| Decimal context determinism | PASS locally | Fill construction and last-mile validation use explicit `CalculationConfig`; configured precision changes audited arithmetic and execution identity; ambient precision/rounding variants produce identical canonical results without context leakage. |
+| Exact boundary semantics | PASS locally | Equality passes for deviation tolerance, minimum RR, risk budget and margin capacity; one-step violations reject with exact canonical reason codes; repeated results are byte-identical. |
 
-Remediation CI status is `PENDING`: local results cannot substitute for a Python 3.12
-workflow on the exact remediation commit.
+Safety-remediation CI at `1f2b59a` is PASS. Final Decimal-remediation CI is `PENDING`:
+local results cannot substitute for a Python 3.12 workflow on the exact final commit.
+All automated acceptance criteria pass at their recorded evidence scope. Final PHASE 5
+approval remains external/human.
 
 ## Acceptance criteria
 
@@ -75,7 +83,7 @@ workflow on the exact remediation commit.
 | 30 | No invented OKX semantics | PASS | Only injected linear fixture metadata is supported; liquidation is explicitly not implemented. |
 | 31 | Deterministic run identity | PASS locally after remediation | Run ID is content-derived and identity-change tests cover strategy/data/execution/cost and last-mile inputs. |
 | 32 | Deterministic cost identity | PASS | Hash covers all rates and funding assumptions; changed slippage changes ID. |
-| 33 | Deterministic execution identity | PASS locally after remediation | Hash covers clock/fill/ambiguity/gap/end policies plus last-mile validation and Decimal assumptions; configuration changes alter ID. |
+| 33 | Deterministic execution identity | PASS locally after remediation | Hash covers clock/fill/ambiguity/gap/end policies plus last-mile validation and the Decimal policy actually applied to entry execution; precision changes alter ID. |
 | 34 | Per-timeframe historical versions recorded | PASS | `HistoricalVersionSet` is embedded in `BacktestRunSpec` and report. |
 | 35 | Snapshot composite recorded | PASS | Run `VersionSet.data_version` must equal the M5/M15/H1 composite or construction fails. |
 | 36 | Repeat complete run is canonical-identical | PASS | Repeated run asserts byte-equivalent `canonical_json` including all artifacts. |
@@ -99,7 +107,7 @@ workflow on the exact remediation commit.
 | 54 | No AI integration | PASS | No AI dependency or runtime path added. |
 | 55 | No OKX/network client | PASS | Backtest consumes local repository ports only; no exchange SDK, credential, or network code added. |
 | 56 | Existing PHASE 1–4 tests pass | PASS | Full local pytest suite passes without skipped/disabled legacy tests. |
-| 57 | Python 3.12 CI passes final commit | NEEDS_WORK | `deb6d2d` passed, but the exact remediation commit has not been pushed and has no remote Python 3.12 evidence. |
+| 57 | Python 3.12 CI passes pushed remediation baseline | PASS | Commit `1f2b59a`; GitHub Actions run #5; job `python-312`; result SUCCESS. Exact final Decimal-remediation commit CI remains pending until pushed. |
 | 58 | Ruff passes | PASS | `ruff check src tests` and `ruff format --check src tests` pass locally. |
 | 59 | Mypy passes | PASS | Strict `mypy src` passes locally. |
 | 60 | `docs/backtesting.md` complete | PASS | All 26 required sections are present. |
@@ -131,6 +139,6 @@ backtest output.
 
 1. Commit the PHASE 5 remediation and evidence locally.
 2. Push once when explicitly requested or when the agreed batch is ready.
-3. Require GitHub Actions Python 3.12 to pass that exact remediation commit.
+3. Require GitHub Actions Python 3.12 to pass the exact final Decimal-remediation commit.
 4. Obtain explicit human review before changing PHASE 5 to `APPROVED` or starting
    PHASE 6.

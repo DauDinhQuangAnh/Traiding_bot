@@ -35,6 +35,7 @@ def _attempt(order, trade, plan, bar, instrument, config):
         config.execution,
         config.risk,
         trade.cost_rate_estimate,
+        config.calculation,
         current_notional=D("0"),
         available_margin=config.backtest.initial_equity,
         account_equity=config.backtest.initial_equity,

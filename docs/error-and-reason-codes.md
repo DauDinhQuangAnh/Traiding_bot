@@ -80,6 +80,7 @@ Expected action vocabulary:
 | `DAILY_DRAWDOWN_LIMIT` | RISK_LIMIT | CRITICAL | Equity drawdown từ session peak chạm/vượt cap | HALT | Risk event + peak/current equity |
 | `DAILY_TRADE_LIMIT` | RISK_LIMIT | WARNING | Số lifecycle đã có first non-zero entry fill chạm cap ngày | REJECT until boundary; no auto-clear active halt | Risk event + counts |
 | `CONSECUTIVE_LOSS_LIMIT` | RISK_LIMIT | CRITICAL | Consecutive closed losses chạm/vượt cap | HALT | Risk event + kill switch + trade IDs |
+| `EQUITY_DEPLETED` | RISK_LIMIT | CRITICAL | Backtest/runtime account equity chạm zero hoặc âm do realized/marked loss; không đại diện chính xác cho venue liquidation/bankruptcy | HALT; không cho entry mới | `KILL_SWITCH_TRIGGERED` / `ECONOMIC_HALT`; ghi equity, cash, trade/fill IDs và giới hạn no-liquidation model; PHASE 5 giữ nguyên deficit và kết thúc `HALTED` |
 | `COOLDOWN_ACTIVE` | RISK_LIMIT | INFO | Loss cooldown chưa hết | REJECT | Risk event + cooldown_until |
 | `MAX_OPEN_POSITIONS` | RISK_LIMIT | WARNING | Open-position count chạm configured cap | REJECT | Risk event + observed/cap |
 | `RISK_BUDGET_INVALID` | SIZING | ERROR | Allowed risk budget bằng/nhỏ hơn zero hoặc không tính được | REJECT/HALT by cause | Risk event + equity/daily capacity |

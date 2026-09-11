@@ -1,6 +1,6 @@
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, InvalidOperation, localcontext
 from typing import cast
 
 import pytest
@@ -25,12 +25,13 @@ from trading_bot.domain.enums import (
     TradeSide,
 )
 from trading_bot.domain.errors import DomainValidationError
+from trading_bot.domain.primitives import canonical_json
+from trading_bot.domain.value_objects import Target
 from trading_bot.infrastructure.sqlite_backtest import SQLiteBacktestRepository
 
 from .helpers import approved_plan, candidate, candle, engine_inputs, evaluation
 
 D = Decimal
-FUNDING_RATE = D("0.001")
 FUNDING_RATE = D("0.001")
 
 
@@ -62,6 +63,7 @@ def _attempt(
         configured.execution,
         configured.risk,
         costs,
+        configured.calculation,
         current_notional=D(current_notional),
         available_margin=D(available_margin),
         account_equity=configured.backtest.initial_equity,
@@ -263,6 +265,185 @@ def test_same_reference_entry_passes_with_exact_decimal_audit(app_config):
     assert result.calculations["actual_expected_rr"] == D("2")
 
 
+def _zero_cost_config(app_config):
+    return replace(
+        app_config,
+        backtest=replace(
+            app_config.backtest,
+            modeled_spread_rate=D("0"),
+            market_slippage_rate=D("0"),
+            stop_slippage_rate=D("0"),
+            maker_fee_rate=D("0"),
+            taker_fee_rate=D("0"),
+        ),
+    )
+
+
+def test_price_deviation_boundary_is_inclusive(app_config):
+    configured = _zero_cost_config(app_config)
+
+    at_tolerance = _attempt(configured, opening="100.2")
+    above_tolerance = _attempt(configured, opening="100.2001")
+
+    assert at_tolerance.calculations["price_deviation"] == D("0.002")
+    assert at_tolerance.status is OrderStatus.FILLED
+    assert above_tolerance.calculations["price_deviation"] == D("0.002001")
+    assert above_tolerance.reason_codes == (ReasonCode.PRICE_DEVIATION_TOO_HIGH,)
+
+
+def test_minimum_rr_boundary_is_inclusive(app_config):
+    configured = _zero_cost_config(app_config)
+
+    at_minimum = _attempt(
+        configured,
+        plan_change={"targets": (Target("TP", D("107.5"), D("1")),)},
+    )
+    below_minimum = _attempt(
+        configured,
+        plan_change={"targets": (Target("TP", D("107.4999"), D("1")),)},
+    )
+
+    assert at_minimum.calculations["actual_expected_rr"] == D("1.5")
+    assert at_minimum.status is OrderStatus.FILLED
+    assert below_minimum.calculations["actual_expected_rr"] == D("1.49998")
+    assert below_minimum.reason_codes == (ReasonCode.RR_TOO_LOW,)
+
+
+def test_risk_budget_boundary_is_inclusive(app_config):
+    configured = _zero_cost_config(app_config)
+
+    at_budget = _attempt(configured, plan_change={"risk_budget": D("5")})
+    above_budget = _attempt(
+        configured,
+        opening="100.0001",
+        plan_change={"risk_budget": D("5")},
+    )
+
+    assert at_budget.calculations["actual_worst_case_loss"] == D("5")
+    assert at_budget.status is OrderStatus.FILLED
+    assert above_budget.calculations["actual_worst_case_loss"] == D("5.0001")
+    assert above_budget.reason_codes == (ReasonCode.RISK_BUDGET_EXCEEDED,)
+
+
+def test_margin_capacity_boundary_is_inclusive(app_config):
+    configured = _zero_cost_config(
+        replace(app_config, risk=replace(app_config.risk, margin_buffer_ratio=D("0")))
+    )
+
+    at_capacity = _attempt(configured, available_margin="50")
+
+    assert at_capacity.calculations["required_margin"] == D("50")
+    assert at_capacity.calculations["available_margin"] == D("50")
+    assert at_capacity.status is OrderStatus.FILLED
+
+
+def test_last_mile_uses_configured_precision(app_config):
+    configured = _zero_cost_config(app_config)
+    opening = "100.123456789012345678901234567890123456789"
+    precision_28 = replace(
+        configured,
+        calculation=replace(configured.calculation, decimal_precision=28),
+    )
+    precision_50 = replace(
+        configured,
+        calculation=replace(configured.calculation, decimal_precision=50),
+    )
+
+    result_28 = _attempt(precision_28, opening=opening)
+    result_50 = _attempt(precision_50, opening=opening)
+
+    assert result_28.status is OrderStatus.FILLED
+    assert result_50.status is OrderStatus.FILLED
+    assert result_28.calculations["price_deviation"] == D("0.001234567890123456789012346")
+    assert result_50.calculations["price_deviation"] == D(
+        "0.00123456789012345678901234567890123456789"
+    )
+
+
+def test_ambient_decimal_context_cannot_change_canonical_entry_result(app_config):
+    start = datetime(2026, 1, 1, 10, 15, tzinfo=UTC)
+    configured_app = _zero_cost_config(app_config)
+    spec, configured, instrument, costs, _ = engine_inputs(
+        configured_app, start, start + timedelta(minutes=5)
+    )
+    trade = candidate(start, spec.versions, costs, identity="ambient-context")
+    plan = approved_plan(trade, start)
+    order = create_entry_order(trade, plan, start)
+    bar = candle(
+        start,
+        "100.123456789012345678901234567890123456789",
+        "120",
+        "80",
+        "100.123456789012345678901234567890123456789",
+    )
+
+    def execute() -> EntryExecutionResult:
+        return try_fill_entry(
+            order,
+            trade,
+            plan,
+            bar,
+            instrument,
+            configured.backtest,
+            configured.execution,
+            configured.risk,
+            costs,
+            configured.calculation,
+            current_notional=D("0"),
+            available_margin=D("10000"),
+            account_equity=configured.backtest.initial_equity,
+        )
+
+    with localcontext() as ambient:
+        ambient.prec = 6
+        ambient.rounding = ROUND_DOWN
+        low_precision_ambient = execute()
+        assert ambient.prec == 6
+        assert ambient.rounding == ROUND_DOWN
+    with localcontext() as ambient:
+        ambient.prec = 50
+        ambient.rounding = ROUND_UP
+        high_precision_ambient = execute()
+        assert ambient.prec == 50
+        assert ambient.rounding == ROUND_UP
+
+    assert low_precision_ambient.status is high_precision_ambient.status is OrderStatus.FILLED
+    assert low_precision_ambient.reason_codes == high_precision_ambient.reason_codes == ()
+    assert low_precision_ambient.calculations == high_precision_ambient.calculations
+    assert low_precision_ambient.fill == high_precision_ambient.fill
+    assert canonical_json(low_precision_ambient) == canonical_json(high_precision_ambient)
+
+
+def test_last_mile_entry_result_is_exactly_repeatable(app_config):
+    configured = _zero_cost_config(app_config)
+
+    canonical_results = {
+        canonical_json(
+            _attempt(
+                configured,
+                opening="100.123456789012345678901234567890123456789",
+            )
+        )
+        for _ in range(10)
+    }
+
+    assert len(canonical_results) == 1
+
+
+def test_last_mile_decimal_failure_rejects_with_canonical_reason(app_config, monkeypatch):
+    def fail_modeled_quote(*_args, **_kwargs):
+        raise InvalidOperation
+
+    monkeypatch.setattr("trading_bot.backtest.execution.modeled_quote", fail_modeled_quote)
+
+    result = _attempt(app_config)
+
+    assert result.status is OrderStatus.REJECTED
+    assert result.fill is None
+    assert result.reason_codes == (ReasonCode.NUMERICAL_ERROR,)
+    assert result.calculations == {}
+
+
 @pytest.mark.parametrize(
     ("side", "opening"),
     [(TradeSide.LONG, "102"), (TradeSide.SHORT, "98")],
@@ -371,7 +552,13 @@ def test_execution_identity_covers_last_mile_configuration(app_config):
         replace(app_config.risk, minimum_rr=D("1.6")),
         app_config.calculation,
     )
-    assert len({base, changed_tolerance, changed_rr}) == 3
+    changed_precision = execution_model_version(
+        app_config.backtest,
+        app_config.execution,
+        app_config.risk,
+        replace(app_config.calculation, decimal_precision=40),
+    )
+    assert len({base, changed_tolerance, changed_rr, changed_precision}) == 4
 
 
 def test_unknown_entry_model_fails_closed_before_order_creation(app_config):

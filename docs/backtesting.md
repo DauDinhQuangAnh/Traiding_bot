@@ -69,7 +69,12 @@ Risk Engine again or resizing: price deviation, side geometry, stop invariants, 
 worst-case loss versus the approved risk budget, notional/exposure/leverage, margin, and
 maximum slippage must all remain valid. Rejection is terminal and journals the approved
 entry, actual entry, deviation, actual RR, actual worst loss, budget, capacities, and
-reason codes. Any entry model other than `CLOSE_REFERENCE` fails closed.
+reason codes. Fill construction and every arithmetic input to this last-mile validation
+run inside the configured `CalculationConfig` Decimal context. The scope applies the
+declared precision and rounding mode with `localcontext`, so caller ambient precision or
+rounding cannot alter the canonical result and the context does not leak after return.
+Expected arithmetic failures reject with canonical `NUMERICAL_ERROR`. Any entry model
+other than `CLOSE_REFERENCE` fails closed.
 
 ## 7. Stop execution
 
@@ -212,7 +217,9 @@ side, regime, or setup and never feed results back into strategy parameters.
 versions, instrument metadata, execution model, cost model, funding model, explicit UTC
 range, and initial equity. Execution identity hashes timing and ambiguity policies,
 the last-mile validation version, deviation tolerance, relevant risk caps/invariants,
-funding-buffer interval count, and Decimal calculation policy.
+funding-buffer interval count, and the same Decimal calculation policy used by actual
+last-mile fill construction and validation. Changing configured Decimal precision changes
+execution identity even when a particular simple fixture happens to round identically.
 Cost identity hashes spread, slippage, fees, funding mode/rate/interval, and provider
 version. Host paths, wall clock, UUIDs, and database location are excluded.
 
@@ -228,8 +235,9 @@ while programming invariants still raise.
 
 The engine uses Decimal, UTC timestamps, deterministic content-derived IDs, stable
 collection ordering, immutable emitted models, explicit prior portfolio state, and no
-randomness. Two complete runs must have byte-identical canonical JSON. Rebuilding the
-SQLite database must preserve the same stored bytes.
+randomness. Last-mile entry math explicitly overrides surrounding Decimal precision and
+rounding within a non-leaking local scope. Two complete runs must have byte-identical
+canonical JSON. Rebuilding the SQLite database must preserve the same stored bytes.
 
 ## 25. Limitations
 

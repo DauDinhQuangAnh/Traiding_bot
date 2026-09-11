@@ -245,6 +245,7 @@ class BacktestEngine:
             self.config.execution,
             self.config.risk,
             self.costs,
+            self.config.calculation,
             current_notional=portfolio.current_notional(bar.open),
             available_margin=max(Decimal("0"), portfolio.equity - portfolio.used_margin(bar.open)),
             account_equity=portfolio.equity,
