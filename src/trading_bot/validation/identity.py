@@ -10,11 +10,34 @@ from trading_bot.validation.models import (
     PartitionType,
     PartitionWindow,
     RobustnessEvidenceRequirements,
+    RobustnessRules,
     TemporalSplitSpec,
+    ValidationPolicy,
     ValidationProtocol,
 )
 
-_DEFAULT_ROBUSTNESS_EVIDENCE_REQUIREMENTS = RobustnessEvidenceRequirements()
+
+def create_validation_policy(
+    *,
+    policy_version: str,
+    minimum_sample_size: int,
+    robustness_rules: RobustnessRules,
+    robustness_evidence_requirements: RobustnessEvidenceRequirements,
+) -> ValidationPolicy:
+    identifier = deterministic_id(
+        "validation-policy-v1",
+        policy_version,
+        minimum_sample_size,
+        robustness_rules,
+        robustness_evidence_requirements,
+    )
+    return ValidationPolicy(
+        identifier,
+        policy_version,
+        minimum_sample_size,
+        robustness_rules,
+        robustness_evidence_requirements,
+    )
 
 
 def create_validation_protocol(
@@ -29,9 +52,7 @@ def create_validation_protocol(
     cost_model_version: str,
     funding_model_version: str,
     instrument_metadata_version: str,
-    robustness_evidence_requirements: RobustnessEvidenceRequirements = (
-        _DEFAULT_ROBUSTNESS_EVIDENCE_REQUIREMENTS
-    ),
+    validation_policy: ValidationPolicy,
     allowed_sensitivity_dimensions: tuple[str, ...] = (),
     test_locked: bool = True,
     test_evaluation_count: int = 0,
@@ -51,7 +72,7 @@ def create_validation_protocol(
         cost_model_version,
         funding_model_version,
         instrument_metadata_version,
-        robustness_evidence_requirements,
+        validation_policy,
         allowed_sensitivity_dimensions,
         state_policy,
         test_locked,
@@ -68,7 +89,7 @@ def create_validation_protocol(
         cost_model_version,
         funding_model_version,
         instrument_metadata_version,
-        robustness_evidence_requirements,
+        validation_policy,
         allowed_sensitivity_dimensions,
         state_policy,
         test_locked,

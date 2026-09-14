@@ -17,7 +17,8 @@ from .helpers import validation_run
 
 def test_validation_sqlite_is_idempotent_and_canonical(tmp_path):
     result = validation_run()
-    repository = SQLiteValidationRepository(tmp_path / "validation.db")
+    path = tmp_path / "validation.db"
+    repository = SQLiteValidationRepository(path)
     try:
         first = repository.append_result(result)
         persisted = replace(
@@ -32,6 +33,17 @@ def test_validation_sqlite_is_idempotent_and_canonical(tmp_path):
         assert repository.get_result_json(result.validation_run_id) == canonical_json(persisted)
         assert repository.list_run_ids() == (result.validation_run_id,)
         assert validation_json(result) == canonical_json(result)
+        connection = sqlite3.connect(path)
+        stored_protocol = json.loads(
+            connection.execute(
+                "SELECT protocol_json FROM validation_protocols WHERE protocol_id = ?",
+                (result.protocol.protocol_id,),
+            ).fetchone()[0]
+        )
+        connection.close()
+        assert stored_protocol["validation_policy"] == json.loads(
+            canonical_json(result.protocol.validation_policy)
+        )
     finally:
         repository.close()
 
@@ -49,17 +61,19 @@ def test_validation_sqlite_rejects_conflicting_same_id(tmp_path):
 
 
 def test_validation_sqlite_rejects_conflicting_protocol_identity(tmp_path):
-    first = validation_run("protocol-first")
-    second = validation_run("protocol-second")
-    conflict = replace(
-        second,
-        protocol=replace(second.protocol, protocol_version="conflicting-protocol-content"),
-    )
-    repository = SQLiteValidationRepository(tmp_path / "validation.db")
+    result = validation_run("protocol-first")
+    path = tmp_path / "validation.db"
+    repository = SQLiteValidationRepository(path)
     try:
-        repository.append_result(first)
+        connection = sqlite3.connect(path)
+        connection.execute(
+            "INSERT INTO validation_protocols VALUES (?, ?)",
+            (result.protocol.protocol_id, '{"conflicting":"policy bytes"}'),
+        )
+        connection.commit()
+        connection.close()
         with pytest.raises(PersistenceError, match="protocol ID conflicts"):
-            repository.append_result(conflict)
+            repository.append_result(result)
     finally:
         repository.close()
 

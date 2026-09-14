@@ -52,8 +52,10 @@ an authoritative counter in memory. SQLite transactionally assigns the next dura
 `consumption_index` when evidence is first persisted and records that same value as the
 stored protocol's audit count. Code, strategy, config, split, historical M5/M15/H1/snapshot
 versions, execution, cost, funding and instrument identities are frozen in
-`ValidationProtocol`. A semantic mismatch fails before any backtest. New semantics require
-a new protocol identity; stored evidence is never silently replaced.
+`ValidationProtocol`. The protocol also freezes one immutable `ValidationPolicy`, which
+owns the interpretation rules described below. A semantic mismatch fails before any
+backtest. New experiment or interpretation semantics require a new protocol identity;
+stored evidence is never silently replaced.
 
 ## 8. Validation identity
 
@@ -65,8 +67,13 @@ Machine paths, wall clock and random UUIDs are excluded.
 
 Identity meanings are deliberately separate:
 
-- `protocol_id` identifies frozen experiment semantics and robustness-evidence
-  requirements; it excludes the TEST viewing count.
+- `validation_policy_id` is SHA-based canonical identity over `policy_version`,
+  `minimum_sample_size`, all `RobustnessRules`, and all
+  `RobustnessEvidenceRequirements` flags. The immutable policy validates that its ID
+  matches its content.
+- `protocol_id` identifies frozen experiment semantics plus the complete validation
+  policy; the immutable protocol validates that its ID matches its content and excludes
+  the TEST viewing count.
 - `validation_run_id` identifies one completed evidence payload and includes its
   deterministic TEST consumption event, but excludes the store-assigned sequence number.
 - `partition_result_id` binds protocol, partition/window and backtest run.
@@ -110,6 +117,13 @@ change only when funding is the declared stress dimension. When the executed tra
 unchanged, higher total costs cannot improve net PnL. If friction changes entry acceptance,
 non-monotonic trade-level metrics are reported rather than disguised.
 
+Multiplier `1` is exactly the frozen baseline: its evaluation cost identity must equal
+`protocol.cost_model_version` or evaluation fails closed. For every multiplier greater
+than `1`, the required stressed-cost identity is deterministically derived from the frozen
+baseline cost version, the complete `CostStressSpec`, and the multiplier. An arbitrary
+different version string is not accepted. `stress_id` binds that derived version together
+with protocol, specification, multiplier, and execution path.
+
 Unchanged path means an identical SHA-based fingerprint over the supplied execution order:
 trade/candidate/approved-plan identity, stable entry execution identity, direction, entry
 time, exit time and exit reason. Entry/exit prices, fees, cost estimates and PnL are excluded
@@ -135,21 +149,29 @@ resamples with a defined loss denominator.
 
 ## 14. Sample size
 
-Every partition and side/regime/setup group carries `trade_count` and an explicit
-`insufficient_sample` flag driven by the declared minimum. Zero trades, one trade, no
-losses, no wins and undefined PF remain valid typed cases; undefined is `null`, never a
-fabricated zero.
+`minimum_sample_size` comes only from the protocol's immutable `ValidationPolicy` during
+official orchestration. Every partition metric records that frozen threshold; every
+side/regime/setup group carries `trade_count` and a matching explicit
+`insufficient_sample` flag. `ValidationMetrics` rejects inconsistent flags, and assembled
+runs, sensitivity, cost stress, and robustness classification reject evidence carrying a
+different sample threshold. Low-level projection accepts an explicit threshold only to
+perform the calculation; the official pipeline supplies it from the policy and exposes no
+competing runtime argument. Zero trades, one trade, no losses, no wins and undefined PF
+remain valid typed cases; undefined is `null`, never a fabricated zero.
 
 ## 15. Robustness interpretation
 
 The allowed statuses are `INSUFFICIENT_DATA`, `FRAGILE`, `MIXED` and
 `ROBUST_CANDIDATE`. Rules declare minimum OOS trades, minimum positive-window ratio,
 minimum expectancy and maximum sensitivity dispersion. Component results remain visible.
-`RobustnessEvidenceRequirements` is frozen into the protocol and requires walk-forward,
-sensitivity and cost-stress evidence by default. Required sensitivity must contain baseline
-and non-baseline scenarios; required stress must contain baseline and stressed scenarios;
-required evidence must not be sample-insufficient. Missing or incomplete required evidence
-returns `MIXED` and can never produce `ROBUST_CANDIDATE`.
+Rules and `RobustnessEvidenceRequirements` are owned by the immutable validation policy
+and participate in both policy and protocol identity. The classifier accepts the protocol,
+not an independent rules argument, and reads both objects from `protocol.validation_policy`.
+Requirements demand walk-forward, sensitivity and cost-stress evidence by default.
+Required sensitivity must contain baseline and non-baseline scenarios; required stress
+must contain baseline and stressed scenarios; required evidence must not be
+sample-insufficient. Missing or incomplete required evidence returns `MIXED` and can never
+produce `ROBUST_CANDIDATE`.
 `ROBUST_CANDIDATE` is historical evidence only and never means profitable or authorized
 for Demo/Live trading.
 
@@ -159,8 +181,10 @@ for Demo/Live trading.
 walk-forward windows, sensitivity, stress and benchmarks in append-only tables. Same ID
 plus identical bytes is idempotent. Same ID plus different bytes raises
 `PersistenceError`. Historical version sets are retained on the protocol, run, and every
-partition result. `validation_test_consumptions` is an append-only ledger keyed by protocol
-and monotonic index, with unique deterministic event/run identities. `BEGIN IMMEDIATE`
+partition result. Canonical protocol JSON contains the complete frozen validation policy;
+the same protocol ID with different policy bytes is a conflict, never an overwrite.
+`validation_test_consumptions` is an append-only ledger keyed by protocol and monotonic
+index, with unique deterministic event/run identities. `BEGIN IMMEDIATE`
 serializes read-next-index plus evidence/ledger insertion atomically. A retry with identical
 event ID/content returns its original record without incrementing; conflicting content
 fails. A new event receives `MAX(index)+1` even when its caller reused the original

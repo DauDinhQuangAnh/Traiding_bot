@@ -75,6 +75,8 @@ def evaluate_sensitivity(
                 and evaluation.cost_model_version == protocol.cost_model_version
                 and evaluation.funding_model_version == protocol.funding_model_version
                 and evaluation.instrument_metadata_version == protocol.instrument_metadata_version
+                and evaluation.metrics.minimum_sample_size
+                == protocol.validation_policy.minimum_sample_size
             )
             if not identities_match:
                 raise DomainValidationError("sensitivity evaluation provenance mismatch")

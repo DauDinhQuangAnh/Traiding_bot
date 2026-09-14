@@ -23,11 +23,19 @@ from trading_bot.domain.value_objects import Target, VersionSet
 from trading_bot.historical.models import HistoricalVersionSet
 from trading_bot.validation.identity import (
     create_test_consumption_event_id,
+    create_validation_policy,
     create_validation_protocol,
     partition_result_id,
 )
 from trading_bot.validation.metrics import project_validation_metrics
-from trading_bot.validation.models import PartitionResult, PartitionType, PartitionWindow
+from trading_bot.validation.models import (
+    PartitionResult,
+    PartitionType,
+    PartitionWindow,
+    RobustnessEvidenceRequirements,
+    RobustnessRules,
+    ValidationPolicy,
+)
 from trading_bot.validation.splits import create_temporal_split
 
 D = Decimal
@@ -35,6 +43,34 @@ START = datetime(2026, 1, 1, tzinfo=UTC)
 HISTORICAL = HistoricalVersionSet("m5-v1", "m15-v1", "h1-v1")
 VERSIONS = VersionSet("code-v1", "strategy-v1", "config-v1", HISTORICAL.snapshot_data_version)
 CALCULATION = CalculationConfig(34, DecimalRoundingMode.ROUND_HALF_EVEN)
+DEFAULT_MINIMUM_POSITIVE_WINDOW_RATIO = D("0.5")
+DEFAULT_MINIMUM_EXPECTANCY_R = D("0")
+DEFAULT_MAXIMUM_SENSITIVITY_RANGE_R = D("0.25")
+
+
+def validation_policy(
+    *,
+    policy_version: str = "phase6-test-policy-v1",
+    minimum_sample_size: int = 2,
+    minimum_oos_trades: int = 2,
+    minimum_positive_window_ratio: Decimal = DEFAULT_MINIMUM_POSITIVE_WINDOW_RATIO,
+    minimum_expectancy_r: Decimal = DEFAULT_MINIMUM_EXPECTANCY_R,
+    maximum_sensitivity_range_r: Decimal = DEFAULT_MAXIMUM_SENSITIVITY_RANGE_R,
+    requirements: RobustnessEvidenceRequirements | None = None,
+) -> ValidationPolicy:
+    return create_validation_policy(
+        policy_version=policy_version,
+        minimum_sample_size=minimum_sample_size,
+        robustness_rules=RobustnessRules(
+            minimum_oos_trades,
+            minimum_positive_window_ratio,
+            minimum_expectancy_r,
+            maximum_sensitivity_range_r,
+        ),
+        robustness_evidence_requirements=(
+            requirements if requirements is not None else RobustnessEvidenceRequirements()
+        ),
+    )
 
 
 def trade(
@@ -144,10 +180,15 @@ def backtest_result(
     )
 
 
-def validation_run(execution_id: str = "fixture-execution-1"):
+def validation_run(
+    execution_id: str = "fixture-execution-1",
+    *,
+    policy: ValidationPolicy | None = None,
+):
     split = create_temporal_split(
         evaluation_range(0, 2), evaluation_range(2, 4), evaluation_range(4, 6)
     )
+    frozen_policy = policy if policy is not None else validation_policy()
     protocol = create_validation_protocol(
         protocol_version="protocol-v1",
         code_version="code-v1",
@@ -159,6 +200,7 @@ def validation_run(execution_id: str = "fixture-execution-1"):
         cost_model_version="cost-v1",
         funding_model_version="funding-v1",
         instrument_metadata_version="instrument-v1",
+        validation_policy=frozen_policy,
         allowed_sensitivity_dimensions=("strategy.long_threshold",),
     )
     results = []
@@ -171,7 +213,7 @@ def validation_run(execution_id: str = "fixture-execution-1"):
         metrics = project_validation_metrics(
             backtest_result((trade(0, "10", opened=evaluation.start),)),
             evaluation,
-            minimum_sample_size=5,
+            minimum_sample_size=frozen_policy.minimum_sample_size,
             calculation=CALCULATION,
         )
         results.append(

@@ -92,7 +92,6 @@ def run_baseline_validation(
     metadata: InstrumentMetadata,
     *,
     test_execution_id: str,
-    minimum_sample_size: int,
     requested_warmup: timedelta | None = None,
     funding_provider: FundingRateProvider | None = None,
 ) -> ValidationRun:
@@ -118,7 +117,6 @@ def run_baseline_validation(
             config,
             versions,
             metadata,
-            minimum_sample_size,
             funding_provider,
         )
         for window in windows
@@ -202,7 +200,6 @@ def _run_partition(
     config: AppConfig,
     versions: VersionSet,
     metadata: InstrumentMetadata,
-    minimum_sample_size: int,
     funding_provider: FundingRateProvider | None,
 ) -> PartitionResult:
     bounded = _BoundedHistoricalRepository(repository, window.data_start)
@@ -222,7 +219,7 @@ def _run_partition(
     metrics = project_validation_metrics(
         backtest,
         window.evaluation,
-        minimum_sample_size=minimum_sample_size,
+        minimum_sample_size=protocol.validation_policy.minimum_sample_size,
         calculation=config.calculation,
     )
     spec = backtest.run.spec

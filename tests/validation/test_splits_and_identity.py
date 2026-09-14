@@ -1,10 +1,12 @@
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal, localcontext
 from itertools import pairwise
 
 import pytest
 
 from trading_bot.domain.errors import DomainValidationError
+from trading_bot.domain.primitives import canonical_json
 from trading_bot.validation.identity import (
     create_test_consumption_event_id,
     create_validation_protocol,
@@ -24,7 +26,9 @@ from trading_bot.validation.splits import (
 )
 from trading_bot.validation.walk_forward import generate_walk_forward_windows
 
-from .helpers import HISTORICAL, START, evaluation_range
+from .helpers import HISTORICAL, START, evaluation_range, validation_policy, validation_run
+
+D = Decimal
 
 
 def test_chronological_split_is_deterministic_and_typed():
@@ -135,6 +139,7 @@ def test_walk_forward_overlap_fails_closed():
 
 
 def test_protocol_identity_changes_for_strategy_cost_and_split():
+    policy = validation_policy()
     kwargs = dict(
         protocol_version="v1",
         code_version="code",
@@ -146,6 +151,7 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
         cost_model_version="cost",
         funding_model_version="funding",
         instrument_metadata_version="instrument",
+        validation_policy=policy,
     )
     baseline = create_validation_protocol(**kwargs)
     changed_strategy = create_validation_protocol(**(kwargs | {"strategy_version": "strategy-2"}))
@@ -158,8 +164,8 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
         **(
             kwargs
             | {
-                "robustness_evidence_requirements": RobustnessEvidenceRequirements(
-                    require_cost_stress=False
+                "validation_policy": validation_policy(
+                    requirements=RobustnessEvidenceRequirements(require_cost_stress=False)
                 )
             }
         )
@@ -180,6 +186,108 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
         == 6
     )
     assert consumed.protocol_id == baseline.protocol_id
+
+
+def _policy_protocol(policy):
+    return create_validation_protocol(
+        protocol_version="v1",
+        code_version="code",
+        strategy_version="strategy",
+        config_version="config",
+        split_id="split",
+        historical_versions=HISTORICAL,
+        execution_model_version="execution",
+        cost_model_version="cost",
+        funding_model_version="funding",
+        instrument_metadata_version="instrument",
+        validation_policy=policy,
+    )
+
+
+def test_validation_policy_identity_is_repeatable():
+    baseline = validation_policy()
+    repeated = validation_policy()
+
+    assert baseline.validation_policy_id == repeated.validation_policy_id
+    assert canonical_json(baseline) == canonical_json(repeated)
+    assert _policy_protocol(baseline).protocol_id == _policy_protocol(repeated).protocol_id
+
+
+@pytest.mark.parametrize(
+    "changed_policy",
+    (
+        validation_policy(policy_version="phase6-test-policy-v2"),
+        validation_policy(minimum_sample_size=3),
+        validation_policy(minimum_oos_trades=3),
+        validation_policy(minimum_positive_window_ratio=D("0.75")),
+        validation_policy(minimum_expectancy_r=D("0.5")),
+        validation_policy(maximum_sensitivity_range_r=D("0.10")),
+        validation_policy(requirements=RobustnessEvidenceRequirements(require_sensitivity=False)),
+    ),
+    ids=(
+        "policy-version",
+        "minimum-sample-size",
+        "minimum-oos-trades",
+        "positive-window-ratio",
+        "minimum-expectancy",
+        "sensitivity-range",
+        "evidence-requirements",
+    ),
+)
+def test_each_policy_semantic_changes_policy_and_protocol_identity(changed_policy):
+    baseline = validation_policy()
+
+    assert changed_policy.validation_policy_id != baseline.validation_policy_id
+    assert _policy_protocol(changed_policy).protocol_id != _policy_protocol(baseline).protocol_id
+
+
+@pytest.mark.parametrize("minimum_sample_size", (0, -1))
+def test_validation_policy_rejects_non_positive_minimum_sample(minimum_sample_size):
+    with pytest.raises(DomainValidationError, match="minimum_sample_size"):
+        validation_policy(minimum_sample_size=minimum_sample_size)
+
+
+def test_validation_policy_rejects_identity_that_does_not_match_content():
+    policy = validation_policy()
+
+    with pytest.raises(DomainValidationError, match="does not match policy content"):
+        replace(policy, minimum_sample_size=policy.minimum_sample_size + 1)
+
+
+def test_protocol_rejects_policy_change_without_new_protocol_identity():
+    protocol = validation_run().protocol
+
+    with pytest.raises(DomainValidationError, match="protocol_id does not match"):
+        replace(
+            protocol,
+            validation_policy=validation_policy(minimum_expectancy_r=D("0.5")),
+        )
+
+
+def test_policy_identity_is_independent_of_ambient_decimal_context():
+    baseline = validation_policy(minimum_expectancy_r=D("0.123456789"))
+
+    with localcontext() as context:
+        context.prec = 2
+        repeated = validation_policy(minimum_expectancy_r=D("0.123456789"))
+
+    assert repeated.validation_policy_id == baseline.validation_policy_id
+
+
+def test_validation_run_identity_changes_with_frozen_policy():
+    baseline = validation_run(policy=validation_policy(minimum_expectancy_r=D("0")))
+    changed = validation_run(policy=validation_policy(minimum_expectancy_r=D("0.5")))
+
+    assert baseline.protocol.protocol_id != changed.protocol.protocol_id
+    assert baseline.validation_run_id != changed.validation_run_id
+
+
+def test_identical_policy_protocol_and_evidence_are_canonical():
+    first = validation_run()
+    repeated = validation_run()
+
+    assert first.validation_run_id == repeated.validation_run_id
+    assert canonical_json(first) == canonical_json(repeated)
 
 
 def test_test_consumption_event_identity_is_repeatable_and_execution_specific():

@@ -70,6 +70,7 @@ def project_validation_metrics(
             gross_profit=gross_profit,
             gross_loss=gross_loss,
             groups=_group_metrics(trades, minimum_sample_size),
+            minimum_sample_size=minimum_sample_size,
             insufficient_sample=len(trades) < minimum_sample_size,
         )
 

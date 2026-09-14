@@ -75,7 +75,8 @@ partition reports; a boundary policy must be explicit in each run. Metrics start
 
 `ValidationProtocol` freezes code, strategy, config, split, execution, cost, funding,
 instrument, historical M5/M15/H1/snapshot versions, sensitivity/stress/walk-forward
-specifications and whether TEST is locked. A protocol starts with an unconsumed count;
+specifications, one immutable validation interpretation policy, and whether TEST is locked.
+A protocol starts with an unconsumed count;
 successfully consuming TEST records `test_consumed` and increments an auditable
 evaluation count.
 Changing any semantic input creates a different protocol/run identity; existing TEST
@@ -124,8 +125,10 @@ Results expose trade count, net PnL, PF, expectancy R, maximum drawdown, win rat
 exposure, costs and side/regime/setup breakdowns by reusing PHASE 5 metrics. Every group
 shows sample size. A configured minimum produces `INSUFFICIENT_SAMPLE`. Structured
 classification is one of `INSUFFICIENT_DATA`, `FRAGILE`, `MIXED`, or
-`ROBUST_CANDIDATE`; thresholds are explicit protocol inputs and the component evidence
-remains visible. No magic profitability score is introduced.
+`ROBUST_CANDIDATE`; sample size, classification thresholds, and evidence-completeness
+requirements are explicit inputs to one protocol-owned immutable policy. Policy content
+participates in protocol identity and the component evidence remains visible. No magic
+profitability score is introduced.
 
 ## 15. Statistical uncertainty
 

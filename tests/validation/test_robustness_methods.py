@@ -14,17 +14,19 @@ from trading_bot.validation.models import (
     CostStressResult,
     PartitionType,
     RobustnessEvidenceRequirements,
+    RobustnessRules,
     RobustnessStatus,
     SensitivityEvaluation,
     SensitivityResult,
     WalkForwardWindow,
     WalkForwardWindowResult,
 )
-from trading_bot.validation.robustness import RobustnessRules, classify_robustness
+from trading_bot.validation.robustness import classify_robustness
 from trading_bot.validation.sensitivity import SensitivitySpec, evaluate_sensitivity
 from trading_bot.validation.stress import (
     CostStressEvaluation,
     CostStressSpec,
+    cost_stress_model_version,
     evaluate_cost_stress,
     execution_path_fingerprint,
     unchanged_path_cost_monotonic,
@@ -39,17 +41,18 @@ from .helpers import (
     backtest_result,
     evaluation_range,
     trade,
+    validation_policy,
     validation_run,
 )
 
 D = Decimal
 
 
-def _metrics(*pnls: str):
+def _metrics(*pnls: str, minimum_sample_size: int = 2):
     return project_validation_metrics(
         backtest_result(tuple(trade(index, pnl) for index, pnl in enumerate(pnls))),
         evaluation_range(0, 1),
-        minimum_sample_size=2,
+        minimum_sample_size=minimum_sample_size,
         calculation=CALCULATION,
     )
 
@@ -171,6 +174,27 @@ def test_sensitivity_provenance_mismatch_fails_closed(app_config, change):
         )
 
 
+def test_sensitivity_rejects_sample_policy_mismatch(app_config):
+    protocol = validation_run().protocol
+    spec = SensitivitySpec(
+        "strategy.long_threshold",
+        D("60"),
+        (D("1"),),
+        evaluation_range(2, 4),
+    )
+
+    with pytest.raises(DomainValidationError, match="provenance mismatch"):
+        evaluate_sensitivity(
+            protocol,
+            spec,
+            app_config.calculation,
+            lambda _value: _sensitivity_evaluation(
+                protocol,
+                _metrics("10", "-5", minimum_sample_size=3),
+            ),
+        )
+
+
 def test_sensitivity_provenance_is_canonical_and_repeatable(app_config):
     protocol = validation_run().protocol
     spec = SensitivitySpec(
@@ -206,7 +230,7 @@ def test_cost_stress_versions_every_assumption():
 
     def evaluate(value):
         return CostStressEvaluation(
-            f"cost-{value}",
+            cost_stress_model_version(protocol.cost_model_version, spec, value),
             protocol.strategy_version,
             protocol.config_version,
             protocol.execution_model_version,
@@ -226,6 +250,103 @@ def test_cost_stress_versions_every_assumption():
 
     assert tuple(result.multiplier for result in results) == spec.multipliers
     assert len({result.stressed_cost_model_version for result in results}) == 3
+    assert results[0].stressed_cost_model_version == protocol.cost_model_version
+
+
+def test_cost_stress_rejects_mutated_one_x_cost_model():
+    protocol = validation_run().protocol
+    spec = CostStressSpec((D("1"), D("2")))
+
+    def evaluate(multiplier):
+        cost_version = cost_stress_model_version(protocol.cost_model_version, spec, multiplier)
+        if multiplier == D("1"):
+            cost_version = "mutated-baseline-cost"
+        return CostStressEvaluation(
+            cost_version,
+            protocol.strategy_version,
+            protocol.config_version,
+            protocol.execution_model_version,
+            protocol.funding_model_version,
+            protocol.instrument_metadata_version,
+            D("0.01"),
+            _execution_path(0, 1),
+            _metrics("10", "-5"),
+        )
+
+    with pytest.raises(DomainValidationError, match="baseline does not match frozen"):
+        evaluate_cost_stress(protocol, spec, D("0.01"), evaluate)
+
+
+def test_validation_run_rejects_mutated_one_x_cost_model():
+    run = validation_run()
+    mutated_baseline = CostStressResult(
+        "mutated-baseline",
+        D("1"),
+        "not-the-frozen-cost-model",
+        _execution_path(0, 1),
+        _metrics("10", "-5"),
+    )
+
+    with pytest.raises(DomainValidationError, match="baseline does not match frozen"):
+        replace(run, stress=(mutated_baseline,))
+
+
+def test_cost_stress_rejects_undeclared_stressed_cost_identity():
+    protocol = validation_run().protocol
+    spec = CostStressSpec((D("1"), D("2")))
+
+    def evaluate(multiplier):
+        return CostStressEvaluation(
+            (
+                protocol.cost_model_version
+                if multiplier == D("1")
+                else "arbitrary-different-cost-version"
+            ),
+            protocol.strategy_version,
+            protocol.config_version,
+            protocol.execution_model_version,
+            protocol.funding_model_version,
+            protocol.instrument_metadata_version,
+            D("0.01"),
+            _execution_path(0, 1),
+            _metrics("10", "-5"),
+        )
+
+    with pytest.raises(DomainValidationError, match="frozen stress specification"):
+        evaluate_cost_stress(protocol, spec, D("0.01"), evaluate)
+
+
+def test_stressed_cost_identity_changes_with_declared_assumptions():
+    baseline = "cost-v1"
+    first = CostStressSpec((D("1"), D("2")))
+    changed = CostStressSpec((D("1"), D("2")), stress_fees=False)
+
+    assert cost_stress_model_version(baseline, first, D("1")) == baseline
+    assert cost_stress_model_version(baseline, changed, D("1")) == baseline
+    assert cost_stress_model_version(baseline, first, D("2")) != (
+        cost_stress_model_version(baseline, changed, D("2"))
+    )
+
+
+def test_cost_stress_rejects_sample_policy_mismatch():
+    protocol = validation_run().protocol
+    spec = CostStressSpec((D("1"),))
+
+    def evaluate(multiplier):
+        return CostStressEvaluation(
+            cost_stress_model_version(protocol.cost_model_version, spec, multiplier),
+            protocol.strategy_version,
+            protocol.config_version,
+            protocol.execution_model_version,
+            protocol.funding_model_version,
+            protocol.instrument_metadata_version,
+            D("0.01"),
+            _execution_path(0, 1),
+            _metrics("10", "-5", minimum_sample_size=3),
+        )
+
+    with pytest.raises(DomainValidationError, match="non-cost semantics"):
+        evaluate_cost_stress(protocol, spec, D("0.01"), evaluate)
 
 
 def test_cost_stress_invalid_specs_fail_closed():
@@ -249,7 +370,7 @@ def test_cost_stress_rejects_non_cost_semantic_changes():
 
     def evaluate(multiplier):
         return CostStressEvaluation(
-            f"cost-{multiplier}",
+            cost_stress_model_version(protocol.cost_model_version, spec, multiplier),
             "mutated-strategy",
             protocol.config_version,
             protocol.execution_model_version,
@@ -363,6 +484,7 @@ def test_cost_stress_enforces_monotonicity_for_identical_paths(violation):
     protocol = validation_run().protocol
     baseline = _metrics("20", "-5")
     path = _execution_path(0, 1)
+    spec = CostStressSpec((D("1"), D("2")))
 
     def evaluate(multiplier):
         metrics = baseline
@@ -371,7 +493,7 @@ def test_cost_stress_enforces_monotonicity_for_identical_paths(violation):
         elif multiplier > 1:
             metrics = replace(baseline, total_costs=baseline.total_costs - D("0.1"))
         return CostStressEvaluation(
-            f"cost-{multiplier}",
+            cost_stress_model_version(protocol.cost_model_version, spec, multiplier),
             protocol.strategy_version,
             protocol.config_version,
             protocol.execution_model_version,
@@ -383,16 +505,17 @@ def test_cost_stress_enforces_monotonicity_for_identical_paths(violation):
         )
 
     with pytest.raises(DomainValidationError, match="higher costs improved"):
-        evaluate_cost_stress(protocol, CostStressSpec((D("1"), D("2"))), D("0.01"), evaluate)
+        evaluate_cost_stress(protocol, spec, D("0.01"), evaluate)
 
 
 def test_cost_stress_does_not_apply_monotonicity_to_changed_path_with_same_count():
     protocol = validation_run().protocol
     baseline = _metrics("20", "-5")
+    spec = CostStressSpec((D("1"), D("2")))
 
     def evaluate(multiplier):
         return CostStressEvaluation(
-            f"cost-{multiplier}",
+            cost_stress_model_version(protocol.cost_model_version, spec, multiplier),
             protocol.strategy_version,
             protocol.config_version,
             protocol.execution_model_version,
@@ -403,7 +526,7 @@ def test_cost_stress_does_not_apply_monotonicity_to_changed_path_with_same_count
             baseline if multiplier == 1 else replace(baseline, net_pnl=baseline.net_pnl + D("1")),
         )
 
-    results = evaluate_cost_stress(protocol, CostStressSpec((D("1"), D("2"))), D("0.01"), evaluate)
+    results = evaluate_cost_stress(protocol, spec, D("0.01"), evaluate)
 
     assert results[0].execution_path != results[1].execution_path
 
@@ -534,7 +657,6 @@ def _stress_results(metrics, *, changed_metrics=None):
 
 
 def test_robustness_requires_complete_multidimensional_evidence():
-    rules = RobustnessRules(2, D("0.5"), D("0"), D("0.25"))
     protocol = validation_run().protocol
     healthy = _metrics("20", "10")
     insufficient = _metrics("10")
@@ -543,19 +665,19 @@ def test_robustness_requires_complete_multidimensional_evidence():
     stress = _stress_results(healthy)
 
     assert (
-        classify_robustness(insufficient, (), (), (), protocol, rules, CALCULATION)
+        classify_robustness(insufficient, (), (), (), protocol, CALCULATION)
         is RobustnessStatus.INSUFFICIENT_DATA
     )
     assert (
-        classify_robustness(healthy, windows, (), stress, protocol, rules, CALCULATION)
+        classify_robustness(healthy, windows, (), stress, protocol, CALCULATION)
         is RobustnessStatus.MIXED
     )
     assert (
-        classify_robustness(healthy, windows, sensitivity, (), protocol, rules, CALCULATION)
+        classify_robustness(healthy, windows, sensitivity, (), protocol, CALCULATION)
         is RobustnessStatus.MIXED
     )
     assert (
-        classify_robustness(healthy, (), sensitivity, stress, protocol, rules, CALCULATION)
+        classify_robustness(healthy, (), sensitivity, stress, protocol, CALCULATION)
         is RobustnessStatus.MIXED
     )
     insufficient_window = (_window_result(_metrics("10"), net_pnl="1"),)
@@ -566,13 +688,12 @@ def test_robustness_requires_complete_multidimensional_evidence():
             sensitivity,
             stress,
             protocol,
-            rules,
             CALCULATION,
         )
         is RobustnessStatus.MIXED
     )
     assert (
-        classify_robustness(healthy, windows, sensitivity, stress, protocol, rules, CALCULATION)
+        classify_robustness(healthy, windows, sensitivity, stress, protocol, CALCULATION)
         is RobustnessStatus.ROBUST_CANDIDATE
     )
 
@@ -586,8 +707,6 @@ def test_robustness_rejects_weak_walk_forward_and_versions_optional_requirements
         _window_result(healthy, net_pnl="-1"),
         _window_result(healthy, net_pnl="-2"),
     )
-    rules = RobustnessRules(2, D("0.5"), D("0"), D("0.25"))
-
     assert (
         classify_robustness(
             healthy,
@@ -595,7 +714,6 @@ def test_robustness_rejects_weak_walk_forward_and_versions_optional_requirements
             sensitivity,
             stress,
             strict_protocol,
-            rules,
             CALCULATION,
         )
         is RobustnessStatus.MIXED
@@ -611,7 +729,9 @@ def test_robustness_rejects_weak_walk_forward_and_versions_optional_requirements
         cost_model_version=strict_protocol.cost_model_version,
         funding_model_version=strict_protocol.funding_model_version,
         instrument_metadata_version=strict_protocol.instrument_metadata_version,
-        robustness_evidence_requirements=RobustnessEvidenceRequirements(require_walk_forward=False),
+        validation_policy=validation_policy(
+            requirements=RobustnessEvidenceRequirements(require_walk_forward=False)
+        ),
         allowed_sensitivity_dimensions=strict_protocol.allowed_sensitivity_dimensions,
     )
     assert (
@@ -621,11 +741,66 @@ def test_robustness_rejects_weak_walk_forward_and_versions_optional_requirements
             sensitivity,
             stress,
             optional_walk_forward,
-            rules,
             CALCULATION,
         )
         is RobustnessStatus.ROBUST_CANDIDATE
     )
+
+
+def test_robustness_classifier_uses_only_frozen_protocol_policy():
+    healthy = _metrics("20", "10")
+    windows = (_window_result(healthy, net_pnl="1"),)
+    sensitivity = _sensitivity_results(healthy)
+    stress = _stress_results(healthy)
+    permissive = validation_run(policy=validation_policy(minimum_expectancy_r=D("0"))).protocol
+    strict = validation_run(policy=validation_policy(minimum_expectancy_r=D("0.5"))).protocol
+
+    assert permissive.validation_policy.validation_policy_id != (
+        strict.validation_policy.validation_policy_id
+    )
+    assert permissive.protocol_id != strict.protocol_id
+    assert (
+        classify_robustness(
+            healthy,
+            windows,
+            sensitivity,
+            stress,
+            permissive,
+            CALCULATION,
+        )
+        is RobustnessStatus.ROBUST_CANDIDATE
+    )
+    assert (
+        classify_robustness(
+            healthy,
+            windows,
+            sensitivity,
+            stress,
+            strict,
+            CALCULATION,
+        )
+        is RobustnessStatus.FRAGILE
+    )
+
+
+def test_robustness_rejects_evidence_from_different_sample_policy():
+    protocol = validation_run().protocol
+    wrong_sample_policy = project_validation_metrics(
+        backtest_result((trade(0, "20"), trade(1, "10"), trade(2, "5"))),
+        evaluation_range(0, 1),
+        minimum_sample_size=3,
+        calculation=CALCULATION,
+    )
+
+    with pytest.raises(DomainValidationError, match="frozen sample policy"):
+        classify_robustness(
+            wrong_sample_policy,
+            (),
+            (),
+            (),
+            protocol,
+            CALCULATION,
+        )
 
 
 def test_robustness_rules_reject_invalid_thresholds():
@@ -633,11 +808,16 @@ def test_robustness_rules_reject_invalid_thresholds():
         RobustnessRules(0, D("0.5"), D("0"), D("0.1"))
     with pytest.raises(DomainValidationError, match="maximum_sensitivity"):
         RobustnessRules(2, D("0.5"), D("0"), D("-0.1"))
+    with pytest.raises(DomainValidationError, match="minimum_positive_window_ratio"):
+        RobustnessRules(2, D("1.1"), D("0"), D("0.1"))
+    with pytest.raises(DomainValidationError, match="minimum_expectancy_r"):
+        RobustnessRules(2, D("0.5"), D("NaN"), D("0.1"))
 
 
 def test_sensitivity_and_cost_failures_classify_as_fragile():
-    rules = RobustnessRules(2, D("0.5"), D("0"), D("0.1"))
-    protocol = validation_run().protocol
+    protocol = validation_run(
+        policy=validation_policy(maximum_sensitivity_range_r=D("0.1"))
+    ).protocol
     healthy = _metrics("20", "10")
     windows = (_window_result(healthy, net_pnl="1"),)
     sensitivity = _sensitivity_results(
@@ -654,7 +834,6 @@ def test_sensitivity_and_cost_failures_classify_as_fragile():
             sensitivity,
             healthy_stress,
             protocol,
-            rules,
             CALCULATION,
         )
         is RobustnessStatus.FRAGILE
@@ -666,7 +845,6 @@ def test_sensitivity_and_cost_failures_classify_as_fragile():
             healthy_sensitivity,
             stress,
             protocol,
-            rules,
             CALCULATION,
         )
         is RobustnessStatus.FRAGILE
@@ -678,7 +856,6 @@ def test_sensitivity_and_cost_failures_classify_as_fragile():
             healthy_sensitivity,
             healthy_stress,
             protocol,
-            rules,
             CALCULATION,
         )
         is RobustnessStatus.FRAGILE
@@ -704,7 +881,12 @@ def test_walk_forward_aggregation_weights_expectancy_and_aggregates_raw_profit()
 
 def test_walk_forward_weighted_expectancy_excludes_only_undefined_samples():
     defined = _metrics("20", "10")
-    undefined = replace(_metrics(), trade_count=7, expectancy_r=None)
+    undefined = replace(
+        _metrics(),
+        trade_count=7,
+        expectancy_r=None,
+        insufficient_sample=False,
+    )
 
     summary = summarize_walk_forward(
         (_window_result(defined), _window_result(undefined)), CALCULATION

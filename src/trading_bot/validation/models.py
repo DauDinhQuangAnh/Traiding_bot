@@ -8,6 +8,7 @@ from decimal import Decimal
 from enum import StrEnum, unique
 
 from trading_bot.domain.errors import DomainValidationError
+from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.primitives import (
     require_finite,
     require_non_empty,
@@ -56,6 +57,63 @@ class RobustnessEvidenceRequirements:
     require_walk_forward: bool = True
     require_sensitivity: bool = True
     require_cost_stress: bool = True
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not bool
+            for value in (
+                self.require_walk_forward,
+                self.require_sensitivity,
+                self.require_cost_stress,
+            )
+        ):
+            raise DomainValidationError("robustness evidence requirements must be boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class RobustnessRules:
+    minimum_oos_trades: int
+    minimum_positive_window_ratio: Decimal
+    minimum_expectancy_r: Decimal
+    maximum_sensitivity_range_r: Decimal
+
+    def __post_init__(self) -> None:
+        if type(self.minimum_oos_trades) is not int or self.minimum_oos_trades <= 0:
+            raise DomainValidationError("minimum_oos_trades must be positive")
+        require_ratio(self.minimum_positive_window_ratio, "minimum_positive_window_ratio")
+        require_finite(self.minimum_expectancy_r, "minimum_expectancy_r")
+        require_finite(self.maximum_sensitivity_range_r, "maximum_sensitivity_range_r")
+        if self.maximum_sensitivity_range_r < Decimal("0"):
+            raise DomainValidationError("maximum_sensitivity_range_r must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationPolicy:
+    validation_policy_id: str
+    policy_version: str
+    minimum_sample_size: int
+    robustness_rules: RobustnessRules
+    robustness_evidence_requirements: RobustnessEvidenceRequirements
+
+    def __post_init__(self) -> None:
+        require_non_empty(self.validation_policy_id, "validation_policy_id")
+        require_non_empty(self.policy_version, "policy_version")
+        if type(self.minimum_sample_size) is not int or self.minimum_sample_size <= 0:
+            raise DomainValidationError("minimum_sample_size must be positive")
+        if not isinstance(self.robustness_rules, RobustnessRules) or not isinstance(
+            self.robustness_evidence_requirements,
+            RobustnessEvidenceRequirements,
+        ):
+            raise DomainValidationError("validation policy requires typed robustness semantics")
+        expected_id = deterministic_id(
+            "validation-policy-v1",
+            self.policy_version,
+            self.minimum_sample_size,
+            self.robustness_rules,
+            self.robustness_evidence_requirements,
+        )
+        if self.validation_policy_id != expected_id:
+            raise DomainValidationError("validation_policy_id does not match policy content")
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +251,7 @@ class ValidationMetrics:
     gross_profit: Decimal
     gross_loss: Decimal
     groups: tuple[GroupMetric, ...]
+    minimum_sample_size: int
     insufficient_sample: bool
 
     def __post_init__(self) -> None:
@@ -221,6 +280,15 @@ class ValidationMetrics:
             value = getattr(self, name)
             if value is not None:
                 require_finite(value, name)
+        if type(self.minimum_sample_size) is not int or self.minimum_sample_size <= 0:
+            raise DomainValidationError("minimum_sample_size must be positive")
+        if self.insufficient_sample != (self.trade_count < self.minimum_sample_size):
+            raise DomainValidationError("validation metric sample sufficiency is inconsistent")
+        if any(
+            group.insufficient_sample != (group.trade_count < self.minimum_sample_size)
+            for group in self.groups
+        ):
+            raise DomainValidationError("group sample sufficiency is inconsistent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,7 +346,7 @@ class ValidationProtocol:
     cost_model_version: str
     funding_model_version: str
     instrument_metadata_version: str
-    robustness_evidence_requirements: RobustnessEvidenceRequirements
+    validation_policy: ValidationPolicy
     allowed_sensitivity_dimensions: tuple[str, ...]
     state_policy: StateContinuityPolicy
     test_locked: bool
@@ -298,6 +366,27 @@ class ValidationProtocol:
             "instrument_metadata_version",
         ):
             require_non_empty(getattr(self, name), name)
+        if not isinstance(self.validation_policy, ValidationPolicy):
+            raise DomainValidationError("validation protocol requires a frozen validation policy")
+        expected_id = deterministic_id(
+            "validation-protocol-v1",
+            self.protocol_version,
+            self.code_version,
+            self.strategy_version,
+            self.config_version,
+            self.split_id,
+            self.historical_versions,
+            self.execution_model_version,
+            self.cost_model_version,
+            self.funding_model_version,
+            self.instrument_metadata_version,
+            self.validation_policy,
+            self.allowed_sensitivity_dimensions,
+            self.state_policy,
+            self.test_locked,
+        )
+        if self.protocol_id != expected_id:
+            raise DomainValidationError("protocol_id does not match frozen protocol content")
         if len(set(self.allowed_sensitivity_dimensions)) != len(
             self.allowed_sensitivity_dimensions
         ):
@@ -546,6 +635,8 @@ class ValidationRun:
                 partition_result.instrument_metadata_version
                 == self.protocol.instrument_metadata_version,
                 partition_result.historical_versions == self.historical_versions,
+                partition_result.metrics.minimum_sample_size
+                == self.protocol.validation_policy.minimum_sample_size,
             )
             if not all(identities):
                 raise DomainValidationError("validation partition changed frozen semantics")
@@ -559,9 +650,28 @@ class ValidationRun:
                 evaluation.cost_model_version == self.protocol.cost_model_version,
                 evaluation.funding_model_version == self.protocol.funding_model_version,
                 evaluation.instrument_metadata_version == self.protocol.instrument_metadata_version,
+                evaluation.metrics.minimum_sample_size
+                == self.protocol.validation_policy.minimum_sample_size,
             )
             if not all(identities):
                 raise DomainValidationError("sensitivity changed frozen semantics")
+        if any(
+            item.result.metrics.minimum_sample_size
+            != self.protocol.validation_policy.minimum_sample_size
+            for item in self.walk_forward
+        ):
+            raise DomainValidationError("walk-forward changed frozen sample policy")
+        if any(
+            item.metrics.minimum_sample_size != self.protocol.validation_policy.minimum_sample_size
+            for item in self.stress
+        ):
+            raise DomainValidationError("cost stress changed frozen sample policy")
+        if any(
+            item.multiplier == Decimal("1")
+            and item.stressed_cost_model_version != self.protocol.cost_model_version
+            for item in self.stress
+        ):
+            raise DomainValidationError("cost stress baseline does not match frozen cost model")
         if not self.test_consumed:
             raise DomainValidationError("validation run must record final TEST consumption")
         if self.test_consumed and not self.protocol.test_locked:

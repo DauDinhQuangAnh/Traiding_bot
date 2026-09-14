@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 
 from trading_bot.config.calculation import calculation_context
 from trading_bot.config.models import CalculationConfig
 from trading_bot.domain.errors import DomainValidationError
-from trading_bot.domain.primitives import require_finite, require_ratio
 from trading_bot.validation.models import (
     CostStressResult,
     RobustnessEvidenceRequirements,
@@ -20,32 +18,26 @@ from trading_bot.validation.models import (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class RobustnessRules:
-    minimum_oos_trades: int
-    minimum_positive_window_ratio: Decimal
-    minimum_expectancy_r: Decimal
-    maximum_sensitivity_range_r: Decimal
-
-    def __post_init__(self) -> None:
-        if self.minimum_oos_trades <= 0:
-            raise DomainValidationError("minimum_oos_trades must be positive")
-        require_ratio(self.minimum_positive_window_ratio, "minimum_positive_window_ratio")
-        require_finite(self.minimum_expectancy_r, "minimum_expectancy_r")
-        require_finite(self.maximum_sensitivity_range_r, "maximum_sensitivity_range_r")
-        if self.maximum_sensitivity_range_r < Decimal("0"):
-            raise DomainValidationError("maximum_sensitivity_range_r must be non-negative")
-
-
 def classify_robustness(
     baseline: ValidationMetrics,
     windows: tuple[WalkForwardWindowResult, ...],
     sensitivity: tuple[SensitivityResult, ...],
     stress: tuple[CostStressResult, ...],
     protocol: ValidationProtocol,
-    rules: RobustnessRules,
     calculation: CalculationConfig,
 ) -> RobustnessStatus:
+    policy = protocol.validation_policy
+    rules = policy.robustness_rules
+    evidence_metrics = (
+        baseline,
+        *(item.result.metrics for item in windows),
+        *(item.metrics for item in sensitivity),
+        *(item.metrics for item in stress),
+    )
+    if any(
+        metrics.minimum_sample_size != policy.minimum_sample_size for metrics in evidence_metrics
+    ):
+        raise DomainValidationError("robustness evidence does not match frozen sample policy")
     if (
         baseline.trade_count < rules.minimum_oos_trades
         or baseline.insufficient_sample
@@ -53,7 +45,10 @@ def classify_robustness(
     ):
         return RobustnessStatus.INSUFFICIENT_DATA
     if _missing_required_evidence(
-        windows, sensitivity, stress, protocol.robustness_evidence_requirements
+        windows,
+        sensitivity,
+        stress,
+        policy.robustness_evidence_requirements,
     ):
         return RobustnessStatus.MIXED
     expectancy_values = tuple(

@@ -66,6 +66,25 @@ class CostStressEvaluation:
             raise DomainValidationError("cost stress metrics/path trade count mismatch")
 
 
+def cost_stress_model_version(
+    baseline_cost_model_version: str,
+    spec: CostStressSpec,
+    multiplier: Decimal,
+) -> str:
+    """Derive the declared cost identity from the frozen baseline and stress policy."""
+    require_non_empty(baseline_cost_model_version, "baseline_cost_model_version")
+    if multiplier not in spec.multipliers:
+        raise DomainValidationError("cost stress multiplier is not declared by the specification")
+    if multiplier == Decimal("1"):
+        return baseline_cost_model_version
+    return deterministic_id(
+        "validation-stressed-cost-model-v1",
+        baseline_cost_model_version,
+        spec,
+        multiplier,
+    )
+
+
 def execution_path_fingerprint(
     trades: tuple[BacktestTradeResult, ...],
     entry_execution_ids: tuple[str, ...],
@@ -105,6 +124,17 @@ def evaluate_cost_stress(
     evaluations: list[tuple[Decimal, CostStressEvaluation]] = []
     for multiplier in spec.multipliers:
         evaluation = evaluator(multiplier)
+        expected_cost_model_version = cost_stress_model_version(
+            protocol.cost_model_version,
+            spec,
+            multiplier,
+        )
+        if evaluation.cost_model_version != expected_cost_model_version:
+            if multiplier == Decimal("1"):
+                raise DomainValidationError("cost stress baseline does not match frozen cost model")
+            raise DomainValidationError(
+                "stressed cost model does not match frozen stress specification"
+            )
         identities_match = (
             evaluation.strategy_version == protocol.strategy_version
             and evaluation.config_version == protocol.config_version
@@ -115,6 +145,8 @@ def evaluate_cost_stress(
                 or evaluation.funding_model_version == protocol.funding_model_version
             )
             and evaluation.price_deviation_tolerance == baseline_price_deviation_tolerance
+            and evaluation.metrics.minimum_sample_size
+            == protocol.validation_policy.minimum_sample_size
         )
         if not identities_match:
             raise DomainValidationError("cost stress changed frozen non-cost semantics")

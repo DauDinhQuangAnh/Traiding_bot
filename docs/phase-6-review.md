@@ -9,7 +9,18 @@ remediation, local quality gates, and exact implementation-commit Python 3.12 CI
 `APPROVED` remains reserved for external human review. This document does not self-declare
 final approval.
 
-Current reviewed implementation commit:
+Current pre-policy-closure baseline commit:
+`d96ac3f538f1359e147c050d9443fa2fee52984b` (`docs: close phase 6 external review
+findings`). GitHub Actions workflow `Python quality gates`, run #10, job `python-312`,
+completed SUCCESS for that exact SHA. The policy-identity closure documented below is a
+new local remediation whose exact commit CI remains pending until it is committed and
+pushed.
+
+Run evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34808253865
+
+Job evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34808253865/job/103864292466
+
+The reviewed evidence-integrity implementation commit is
 `211c97b28c2b1e6095a2f8a3b495fe6f4d4b2214` (`fix: finalize phase 6 evidence
 integrity`). GitHub Actions workflow `Python quality gates`, run #9, job `python-312`,
 completed SUCCESS for that exact SHA.
@@ -29,10 +40,9 @@ The first audit found correctness gaps and closed them in remediation commit
 `cd38d1149780ad10146ae17b9d9c0cf0f77bfa8b`. Final evidence-integrity remediation after
 external review is `211c97b28c2b1e6095a2f8a3b495fe6f4d4b2214`.
 
-Local evidence after final remediation: 268 tests passed. Overall branch-aware coverage
-is 86%. Critical changed-module coverage is validation pipeline 97%, robustness 100%,
-stress 98%, sensitivity 94%, and SQLite persistence 98%. Identity, splits, benchmarks and
-walk-forward generation/aggregation remain at 100%.
+Local evidence after policy-identity remediation: 291 tests passed. Overall branch-aware
+coverage is 86%. Critical coverage is validation models 84%, identity 100%, validation
+pipeline 97%, robustness 100%, stress 97%, sensitivity 94%, and SQLite persistence 98%.
 
 ## STRATEGY ROBUSTNESS STATUS
 
@@ -41,6 +51,18 @@ walk-forward generation/aggregation remain at 100%.
 No approved production BTC-USDT-SWAP historical dataset exists in the documented project
 data locations. No temporal split was selected, no final TEST was consumed, and no
 economic result was fabricated. This status is independent of implementation quality.
+
+## Final policy-identity external review
+
+The final policy-identity review identified three interpretation-semantic gaps. They were
+recorded as `OPEN` before source changes and are now locally resolved after focused
+regressions and all project quality gates passed:
+
+| Finding | Status | Required invariant |
+|---|---|---|
+| A. Robustness rules are not frozen | RESOLVED LOCALLY | Every classification threshold is owned by an immutable validation policy whose identity participates in `protocol_id`; the classifier has no free rules input. |
+| B. Minimum sample policy is not frozen | RESOLVED LOCALLY | One protocol-owned `minimum_sample_size` controls baseline partition/group evidence, is retained on all validation metrics, and mismatched evidence fails closed. |
+| C. Cost-stress 1x baseline is not bound to the frozen cost model | RESOLVED LOCALLY | Multiplier `1` must use exactly `protocol.cost_model_version`; stressed versions are deterministically derived from baseline cost assumptions and the complete stress specification. |
 
 ## Remaining external-review findings
 
@@ -129,11 +151,14 @@ No unresolved blocking correctness finding remains in the audited local implemen
 | Bootstrap and benchmarks | PASS locally | Seed replay/different identity/PF intervals and cost-aware benchmark drawdown. |
 | Append-only persistence | PASS locally | Authoritative monotonic ledger, retry idempotency, conflict rejection and explicit legacy-schema failure. |
 | Dashboard read-only boundary | PASS locally | GET/HEAD behavior, write 405, and forbidden-capability source audit. |
-| Full regression suite | PASS locally | 268 tests; no prior test disabled. |
-| Branch-aware coverage | PASS locally | 86% overall; pipeline 97%, robustness 100%, stress 98%, sensitivity 94%, SQLite 98%. |
+| Validation policy identity closure | PASS locally | Immutable typed policy freezes sample size, all robustness rules, and evidence requirements; individual identity and classifier-source regressions pass. |
+| Cost-stress baseline identity closure | PASS locally | Frozen 1x baseline, deterministic >1x identity, and arbitrary-version rejection regressions pass. |
+| Full regression suite | PASS locally | 291 tests; no prior test disabled. |
+| Branch-aware coverage | PASS locally | 86% overall; models 84%, identity 100%, pipeline 97%, robustness 100%, stress 97%, sensitivity 94%, SQLite 98%. |
 | Ruff, mypy, compileall | PASS locally | All project commands pass. |
 | Exact implementation-remediation Python 3.12 CI | PASS | `211c97b`; run #9, job `python-312`, SUCCESS. |
-| Exact final evidence-commit Python 3.12 CI | PENDING | This documentation update requires its own run; run #9 belongs only to `211c97b`. |
+| Exact final evidence-commit Python 3.12 CI | PASS | `d96ac3f`; run #10, job `python-312`, SUCCESS. |
+| Exact policy-identity remediation Python 3.12 CI | PENDING | The new focused commit requires its own exact-SHA run. |
 | External human review | PENDING | Required before `APPROVED`. |
 
 ## Limitations and interpretation

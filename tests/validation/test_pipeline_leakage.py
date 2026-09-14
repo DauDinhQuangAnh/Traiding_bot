@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -13,8 +14,12 @@ from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.primitives import canonical_json
 from trading_bot.domain.value_objects import VersionSet
-from trading_bot.validation.identity import create_validation_protocol
-from trading_bot.validation.models import PartitionType
+from trading_bot.validation.identity import create_validation_policy, create_validation_protocol
+from trading_bot.validation.models import (
+    PartitionType,
+    RobustnessEvidenceRequirements,
+    RobustnessRules,
+)
 from trading_bot.validation.splits import create_temporal_split
 
 from .helpers import HISTORICAL, START, backtest_result, evaluation_range, trade
@@ -35,7 +40,7 @@ class _RecordingRepository:
         )
 
 
-def _inputs(app_config):
+def _inputs(app_config, *, minimum_sample_size=1):
     split = create_temporal_split(
         evaluation_range(0, 10), evaluation_range(10, 20), evaluation_range(20, 30)
     )
@@ -48,6 +53,12 @@ def _inputs(app_config):
         HISTORICAL.snapshot_data_version,
     )
     instrument = metadata(START - timedelta(days=30))
+    policy = create_validation_policy(
+        policy_version="pipeline-policy-v1",
+        minimum_sample_size=minimum_sample_size,
+        robustness_rules=RobustnessRules(2, Decimal("0.5"), Decimal("0"), Decimal("0.25")),
+        robustness_evidence_requirements=RobustnessEvidenceRequirements(),
+    )
     protocol = create_validation_protocol(
         protocol_version="protocol-v1",
         code_version=versions.code_version,
@@ -64,6 +75,7 @@ def _inputs(app_config):
         cost_model_version=cost_model_version(app_config.backtest, provider.model_version),
         funding_model_version=provider.model_version,
         instrument_metadata_version=instrument.version,
+        validation_policy=policy,
     )
     return split, protocol, versions, instrument, provider
 
@@ -118,10 +130,30 @@ def _runner(split, test_pnl):
     return run
 
 
+def _protocol_with(protocol, **changes):
+    values = {
+        "protocol_version": protocol.protocol_version,
+        "code_version": protocol.code_version,
+        "strategy_version": protocol.strategy_version,
+        "config_version": protocol.config_version,
+        "split_id": protocol.split_id,
+        "historical_versions": protocol.historical_versions,
+        "execution_model_version": protocol.execution_model_version,
+        "cost_model_version": protocol.cost_model_version,
+        "funding_model_version": protocol.funding_model_version,
+        "instrument_metadata_version": protocol.instrument_metadata_version,
+        "validation_policy": protocol.validation_policy,
+        "allowed_sensitivity_dimensions": protocol.allowed_sensitivity_dimensions,
+        "test_locked": protocol.test_locked,
+        "test_evaluation_count": protocol.test_evaluation_count,
+    }
+    return create_validation_protocol(**(values | changes))
+
+
 def test_baseline_pipeline_uses_frozen_semantics_and_declared_data_boundary(
     app_config, monkeypatch
 ):
-    split, protocol, versions, instrument, provider = _inputs(app_config)
+    split, protocol, versions, instrument, provider = _inputs(app_config, minimum_sample_size=5)
     repository = _RecordingRepository()
     monkeypatch.setattr(
         "trading_bot.application.validation_pipeline.run_historical_backtest",
@@ -138,7 +170,6 @@ def test_baseline_pipeline_uses_frozen_semantics_and_declared_data_boundary(
         versions,
         instrument,
         test_execution_id="pipeline-execution-1",
-        minimum_sample_size=5,
         funding_provider=provider,
     )
 
@@ -149,6 +180,14 @@ def test_baseline_pipeline_uses_frozen_semantics_and_declared_data_boundary(
     assert result.test_consumed and result.protocol.test_locked
     assert result.protocol.test_evaluation_count == 0
     assert result.test_consumption_index is None
+    assert all(item.metrics.minimum_sample_size == 5 for item in result.partitions)
+    assert all(item.metrics.insufficient_sample for item in result.partitions)
+    assert all(
+        group.insufficient_sample
+        == (group.trade_count < protocol.validation_policy.minimum_sample_size)
+        for item in result.partitions
+        for group in item.metrics.groups
+    )
 
 
 def test_future_test_change_cannot_affect_train_or_validation(app_config, monkeypatch):
@@ -170,7 +209,6 @@ def test_future_test_change_cannot_affect_train_or_validation(app_config, monkey
             versions,
             instrument,
             test_execution_id=f"future-change-{test_pnl}",
-            minimum_sample_size=1,
             funding_provider=provider,
         )
 
@@ -197,12 +235,11 @@ def test_protocol_semantic_mismatch_fails_before_any_backtest(app_config):
             "BTC-USDT-SWAP",
             HISTORICAL,
             split,
-            replace(protocol, strategy_version="mutated-after-test"),
+            _protocol_with(protocol, strategy_version="mutated-after-test"),
             app_config,
             versions,
             instrument,
             test_execution_id="semantic-mismatch",
-            minimum_sample_size=1,
             funding_provider=provider,
         )
 
@@ -228,12 +265,11 @@ def test_code_and_historical_semantic_mismatch_fail_before_backtest(
             "BTC-USDT-SWAP",
             HISTORICAL,
             split,
-            replace(protocol, **protocol_change),
+            _protocol_with(protocol, **protocol_change),
             app_config,
             replace(versions, **version_change),
             instrument,
             test_execution_id="version-mismatch",
-            minimum_sample_size=1,
             funding_provider=provider,
         )
 
@@ -249,12 +285,11 @@ def test_final_test_requires_explicit_protocol_lock(app_config):
             "BTC-USDT-SWAP",
             HISTORICAL,
             split,
-            replace(protocol, test_locked=False, test_evaluation_count=0),
+            _protocol_with(protocol, test_locked=False, test_evaluation_count=0),
             app_config,
             versions,
             instrument,
             test_execution_id="unlocked-test",
-            minimum_sample_size=1,
             funding_provider=provider,
         )
 
