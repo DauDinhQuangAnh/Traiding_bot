@@ -16,11 +16,16 @@ from trading_bot.config.models import AppConfig, CalculationConfig
 from trading_bot.domain.enums import Timeframe
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.market_models import Candle
+from trading_bot.domain.primitives import require_non_empty
 from trading_bot.domain.risk_models import InstrumentMetadata
 from trading_bot.domain.value_objects import VersionSet
 from trading_bot.historical.models import HistoricalVersionSet
 from trading_bot.historical.repository import HistoricalCandleRepository
-from trading_bot.validation.identity import partition_result_id, validation_run_id
+from trading_bot.validation.identity import (
+    create_test_consumption_event_id,
+    partition_result_id,
+    validation_run_id,
+)
 from trading_bot.validation.metrics import project_validation_metrics
 from trading_bot.validation.models import (
     BenchmarkResult,
@@ -86,11 +91,13 @@ def run_baseline_validation(
     versions: VersionSet,
     metadata: InstrumentMetadata,
     *,
+    test_execution_id: str,
     minimum_sample_size: int,
     requested_warmup: timedelta | None = None,
     funding_provider: FundingRateProvider | None = None,
 ) -> ValidationRun:
     """Run one frozen strategy/config across TRAIN, VALIDATION and final TEST."""
+    require_non_empty(test_execution_id, "test_execution_id")
     _validate_protocol(
         protocol,
         split.split_id,
@@ -116,16 +123,19 @@ def run_baseline_validation(
         )
         for window in windows
     )
-    consumed_protocol = replace(
-        protocol,
-        test_evaluation_count=protocol.test_evaluation_count + 1,
+    test_partition = partitions[-1]
+    consumption_event_id = create_test_consumption_event_id(
+        protocol.protocol_id,
+        test_execution_id,
+        test_partition.backtest_run_id,
     )
     return assemble_validation_run(
-        consumed_protocol,
+        replace(protocol, test_evaluation_count=0),
         split,
         historical_versions,
         partitions,
         config.calculation,
+        test_consumption_event_id=consumption_event_id,
         limitations=(
             "M5 OHLC has no intrabar path or order-book queue.",
             "Spread, slippage, fees and funding are modeled assumptions.",
@@ -141,6 +151,8 @@ def assemble_validation_run(
     partitions: tuple[PartitionResult, ...],
     calculation: CalculationConfig,
     *,
+    test_consumption_event_id: str,
+    test_consumption_index: int | None = None,
     walk_forward: tuple[WalkForwardWindowResult, ...] = (),
     sensitivity: tuple[SensitivityResult, ...] = (),
     stress: tuple[CostStressResult, ...] = (),
@@ -151,11 +163,12 @@ def assemble_validation_run(
 ) -> ValidationRun:
     identifier = validation_run_id(
         protocol,
+        test_consumption_event_id,
         split,
         historical_versions,
         tuple(item.window for item in walk_forward),
-        tuple((item.parameter, item.baseline_value, item.multiplier) for item in sensitivity),
-        tuple(item.multiplier for item in stress),
+        sensitivity,
+        stress,
         None if uncertainty is None else uncertainty.bootstrap_id,
         tuple(item.benchmark_id for item in benchmarks),
     )
@@ -173,7 +186,9 @@ def assemble_validation_run(
         uncertainty,
         ImplementationStatus.PASS,
         robustness_status,
-        protocol.test_evaluation_count > 0,
+        True,
+        test_consumption_event_id,
+        test_consumption_index,
         limitations,
     )
 

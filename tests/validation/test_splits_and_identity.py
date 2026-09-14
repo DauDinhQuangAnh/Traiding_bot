@@ -5,10 +5,14 @@ from itertools import pairwise
 import pytest
 
 from trading_bot.domain.errors import DomainValidationError
-from trading_bot.validation.identity import create_validation_protocol
+from trading_bot.validation.identity import (
+    create_test_consumption_event_id,
+    create_validation_protocol,
+)
 from trading_bot.validation.models import (
     EvaluationRange,
     PartitionType,
+    RobustnessEvidenceRequirements,
     WalkForwardMode,
     WalkForwardSpec,
 )
@@ -150,6 +154,16 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
     changed_history = create_validation_protocol(
         **(kwargs | {"historical_versions": replace(HISTORICAL, m5_data_version="m5-v2")})
     )
+    changed_requirements = create_validation_protocol(
+        **(
+            kwargs
+            | {
+                "robustness_evidence_requirements": RobustnessEvidenceRequirements(
+                    require_cost_stress=False
+                )
+            }
+        )
+    )
     consumed = create_validation_protocol(**(kwargs | {"test_evaluation_count": 1}))
 
     assert (
@@ -160,8 +174,16 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
                 changed_cost.protocol_id,
                 changed_split.protocol_id,
                 changed_history.protocol_id,
+                changed_requirements.protocol_id,
             }
         )
-        == 5
+        == 6
     )
     assert consumed.protocol_id == baseline.protocol_id
+
+
+def test_test_consumption_event_identity_is_repeatable_and_execution_specific():
+    first = create_test_consumption_event_id("protocol", "execution-1", "test-backtest")
+
+    assert first == create_test_consumption_event_id("protocol", "execution-1", "test-backtest")
+    assert first != create_test_consumption_event_id("protocol", "execution-2", "test-backtest")

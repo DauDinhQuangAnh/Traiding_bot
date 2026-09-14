@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.historical.models import HistoricalVersionSet
 from trading_bot.validation.models import (
     PartitionType,
     PartitionWindow,
+    RobustnessEvidenceRequirements,
     TemporalSplitSpec,
     ValidationProtocol,
 )
+
+_DEFAULT_ROBUSTNESS_EVIDENCE_REQUIREMENTS = RobustnessEvidenceRequirements()
 
 
 def create_validation_protocol(
@@ -24,6 +29,9 @@ def create_validation_protocol(
     cost_model_version: str,
     funding_model_version: str,
     instrument_metadata_version: str,
+    robustness_evidence_requirements: RobustnessEvidenceRequirements = (
+        _DEFAULT_ROBUSTNESS_EVIDENCE_REQUIREMENTS
+    ),
     allowed_sensitivity_dimensions: tuple[str, ...] = (),
     test_locked: bool = True,
     test_evaluation_count: int = 0,
@@ -43,6 +51,7 @@ def create_validation_protocol(
         cost_model_version,
         funding_model_version,
         instrument_metadata_version,
+        robustness_evidence_requirements,
         allowed_sensitivity_dimensions,
         state_policy,
         test_locked,
@@ -59,6 +68,7 @@ def create_validation_protocol(
         cost_model_version,
         funding_model_version,
         instrument_metadata_version,
+        robustness_evidence_requirements,
         allowed_sensitivity_dimensions,
         state_policy,
         test_locked,
@@ -83,6 +93,7 @@ def partition_result_id(
 
 def validation_run_id(
     protocol: ValidationProtocol,
+    test_consumption_event_id: str,
     split: TemporalSplitSpec,
     historical_versions: HistoricalVersionSet,
     walk_forward_spec: object | None,
@@ -93,7 +104,8 @@ def validation_run_id(
 ) -> str:
     return deterministic_id(
         "validation-run-v1",
-        protocol,
+        replace(protocol, test_evaluation_count=0),
+        test_consumption_event_id,
         split,
         historical_versions,
         walk_forward_spec,
@@ -101,4 +113,17 @@ def validation_run_id(
         stress_spec,
         bootstrap_spec,
         benchmark_spec,
+    )
+
+
+def create_test_consumption_event_id(
+    protocol_id: str,
+    test_execution_id: str,
+    test_backtest_run_id: str,
+) -> str:
+    return deterministic_id(
+        "validation-test-consumption-event-v1",
+        protocol_id,
+        test_execution_id,
+        test_backtest_run_id,
     )

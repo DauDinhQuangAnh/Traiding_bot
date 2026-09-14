@@ -21,7 +21,11 @@ from trading_bot.domain.enums import (
 )
 from trading_bot.domain.value_objects import Target, VersionSet
 from trading_bot.historical.models import HistoricalVersionSet
-from trading_bot.validation.identity import create_validation_protocol, partition_result_id
+from trading_bot.validation.identity import (
+    create_test_consumption_event_id,
+    create_validation_protocol,
+    partition_result_id,
+)
 from trading_bot.validation.metrics import project_validation_metrics
 from trading_bot.validation.models import PartitionResult, PartitionType, PartitionWindow
 from trading_bot.validation.splits import create_temporal_split
@@ -140,7 +144,7 @@ def backtest_result(
     )
 
 
-def validation_run():
+def validation_run(execution_id: str = "fixture-execution-1"):
     split = create_temporal_split(
         evaluation_range(0, 2), evaluation_range(2, 4), evaluation_range(4, 6)
     )
@@ -156,7 +160,6 @@ def validation_run():
         funding_model_version="funding-v1",
         instrument_metadata_version="instrument-v1",
         allowed_sensitivity_dimensions=("strategy.long_threshold",),
-        test_evaluation_count=1,
     )
     results = []
     for partition, evaluation in (
@@ -187,12 +190,18 @@ def validation_run():
                 metrics,
             )
         )
+    event_id = create_test_consumption_event_id(
+        protocol.protocol_id,
+        execution_id,
+        results[-1].backtest_run_id,
+    )
     return assemble_validation_run(
         protocol,
         split,
         HISTORICAL,
         tuple(results),
         CALCULATION,
+        test_consumption_event_id=event_id,
         limitations=("historical-only",),
     )
 

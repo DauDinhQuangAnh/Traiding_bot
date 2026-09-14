@@ -137,6 +137,7 @@ def test_baseline_pipeline_uses_frozen_semantics_and_declared_data_boundary(
         app_config,
         versions,
         instrument,
+        test_execution_id="pipeline-execution-1",
         minimum_sample_size=5,
         funding_provider=provider,
     )
@@ -146,7 +147,8 @@ def test_baseline_pipeline_uses_frozen_semantics_and_declared_data_boundary(
     assert len(set(repository.requested_starts)) == 1
     assert repository.requested_starts[0] == result.partitions[0].window.data_start
     assert result.test_consumed and result.protocol.test_locked
-    assert result.protocol.test_evaluation_count == 1
+    assert result.protocol.test_evaluation_count == 0
+    assert result.test_consumption_index is None
 
 
 def test_future_test_change_cannot_affect_train_or_validation(app_config, monkeypatch):
@@ -167,6 +169,7 @@ def test_future_test_change_cannot_affect_train_or_validation(app_config, monkey
             app_config,
             versions,
             instrument,
+            test_execution_id=f"future-change-{test_pnl}",
             minimum_sample_size=1,
             funding_provider=provider,
         )
@@ -198,6 +201,7 @@ def test_protocol_semantic_mismatch_fails_before_any_backtest(app_config):
             app_config,
             versions,
             instrument,
+            test_execution_id="semantic-mismatch",
             minimum_sample_size=1,
             funding_provider=provider,
         )
@@ -228,6 +232,7 @@ def test_code_and_historical_semantic_mismatch_fail_before_backtest(
             app_config,
             replace(versions, **version_change),
             instrument,
+            test_execution_id="version-mismatch",
             minimum_sample_size=1,
             funding_provider=provider,
         )
@@ -248,6 +253,7 @@ def test_final_test_requires_explicit_protocol_lock(app_config):
             app_config,
             versions,
             instrument,
+            test_execution_id="unlocked-test",
             minimum_sample_size=1,
             funding_provider=provider,
         )

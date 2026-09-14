@@ -12,9 +12,10 @@ from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.primitives import require_finite, require_non_empty
 from trading_bot.validation.models import (
+    EvaluationRange,
     PartitionType,
+    SensitivityEvaluation,
     SensitivityResult,
-    ValidationMetrics,
     ValidationProtocol,
 )
 
@@ -24,6 +25,7 @@ class SensitivitySpec:
     parameter: str
     baseline_value: Decimal
     multipliers: tuple[Decimal, ...]
+    evaluation_range: EvaluationRange
     evaluation_partition: PartitionType = PartitionType.VALIDATION
     maximum_relative_deviation: Decimal = Decimal("0.05")
 
@@ -52,7 +54,7 @@ def evaluate_sensitivity(
     protocol: ValidationProtocol,
     spec: SensitivitySpec,
     calculation: CalculationConfig,
-    evaluator: Callable[[Decimal], ValidationMetrics],
+    evaluator: Callable[[Decimal], SensitivityEvaluation],
 ) -> tuple[SensitivityResult, ...]:
     """Evaluate every declared perturbation in order and deliberately return no winner."""
     if spec.parameter not in protocol.allowed_sensitivity_dimensions:
@@ -61,7 +63,21 @@ def evaluate_sensitivity(
     with calculation_context(calculation):
         for multiplier in spec.multipliers:
             value = spec.baseline_value * multiplier
-            metrics = evaluator(value)
+            evaluation = evaluator(value)
+            identities_match = (
+                evaluation.partition is spec.evaluation_partition
+                and evaluation.partition is not PartitionType.TEST
+                and evaluation.evaluation_range == spec.evaluation_range
+                and evaluation.historical_versions == protocol.historical_versions
+                and evaluation.strategy_version == protocol.strategy_version
+                and evaluation.config_version == protocol.config_version
+                and evaluation.execution_model_version == protocol.execution_model_version
+                and evaluation.cost_model_version == protocol.cost_model_version
+                and evaluation.funding_model_version == protocol.funding_model_version
+                and evaluation.instrument_metadata_version == protocol.instrument_metadata_version
+            )
+            if not identities_match:
+                raise DomainValidationError("sensitivity evaluation provenance mismatch")
             output.append(
                 SensitivityResult(
                     deterministic_id(
@@ -70,14 +86,14 @@ def evaluate_sensitivity(
                         spec.parameter,
                         value,
                         multiplier,
+                        evaluation,
                     ),
                     spec.parameter,
                     spec.baseline_value,
                     value,
                     multiplier,
                     multiplier == Decimal("1"),
-                    spec.evaluation_partition,
-                    metrics,
+                    evaluation,
                 )
             )
     return tuple(output)

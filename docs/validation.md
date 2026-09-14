@@ -46,11 +46,14 @@ The durations, boundaries and policy are versioned in the split identity.
 ## 7. Final test policy
 
 TEST execution requires `test_locked=True`. A new frozen protocol begins with
-`test_evaluation_count=0`; a successful baseline run increments the count in its immutable
-result. Code, strategy, config, split, historical M5/M15/H1/snapshot versions, execution,
-cost, funding and instrument identities are frozen in `ValidationProtocol`. A semantic
-mismatch fails before any backtest. New semantics require a new protocol identity; stored
-evidence is never silently replaced.
+`test_evaluation_count=0` and each execution requires an explicit deterministic execution
+identifier. Execution completion creates `test_consumption_event_id`; it does not invent
+an authoritative counter in memory. SQLite transactionally assigns the next durable
+`consumption_index` when evidence is first persisted and records that same value as the
+stored protocol's audit count. Code, strategy, config, split, historical M5/M15/H1/snapshot
+versions, execution, cost, funding and instrument identities are frozen in
+`ValidationProtocol`. A semantic mismatch fails before any backtest. New semantics require
+a new protocol identity; stored evidence is never silently replaced.
 
 ## 8. Validation identity
 
@@ -59,6 +62,24 @@ snapshot versions, walk-forward declarations, sensitivity dimensions, stress ass
 bootstrap identity and benchmarks. Protocol identity covers code, strategy, config,
 historical versions, execution, costs, funding, metadata, split, lock and state policy.
 Machine paths, wall clock and random UUIDs are excluded.
+
+Identity meanings are deliberately separate:
+
+- `protocol_id` identifies frozen experiment semantics and robustness-evidence
+  requirements; it excludes the TEST viewing count.
+- `validation_run_id` identifies one completed evidence payload and includes its
+  deterministic TEST consumption event, but excludes the store-assigned sequence number.
+- `partition_result_id` binds protocol, partition/window and backtest run.
+- `sensitivity_id` binds protocol, perturbation and complete typed evaluation provenance.
+- `stress_id` binds protocol, stress specification/cost version and execution-path
+  fingerprint.
+- `bootstrap_id` binds protocol, inputs, seed, iterations and minimum sample.
+- `benchmark_id` binds protocol, benchmark policy, official range, marks and costs.
+- `test_consumption_event_id` identifies a completed TEST execution; retrying that event
+  is idempotent.
+- `(protocol_id, consumption_index)` is the store-authoritative monotonic viewing sequence.
+- `ExecutionPathFingerprint.fingerprint` identifies ordered trade executions independently
+  of cost-sensitive PnL and prices.
 
 ## 9. Walk-forward
 
@@ -73,8 +94,12 @@ and overall PF from aggregated gross profit/loss—not the mean of PF values.
 `SensitivitySpec` accepts one existing declared scalar parameter, its Decimal baseline
 and a small unique multiplier sequence. Multiplier `1` must occur exactly once and every
 perturbation must stay within the explicit local deviation bound (±5% by default). Results
-record a non-TEST evaluation partition, preserve input order and record every perturbation.
-No field, function or pipeline selects, ranks, recommends or applies a winner.
+record a non-TEST evaluation partition and expected half-open range, preserve input order
+and record every perturbation. The evaluator must return typed provenance containing the
+partition, range, backtest run, historical versions and frozen strategy/config/execution/
+cost/funding/instrument identities. Any mismatch fails closed. That provenance participates
+in `sensitivity_id` and is stored with the result. No field, function or pipeline selects,
+ranks, recommends or applies a winner.
 
 ## 11. Cost stress
 
@@ -84,6 +109,13 @@ instrument semantics and does not widen price-deviation tolerance. Funding ident
 change only when funding is the declared stress dimension. When the executed trade path is
 unchanged, higher total costs cannot improve net PnL. If friction changes entry acceptance,
 non-monotonic trade-level metrics are reported rather than disguised.
+
+Unchanged path means an identical SHA-based fingerprint over the supplied execution order:
+trade/candidate/approved-plan identity, stable entry execution identity, direction, entry
+time, exit time and exit reason. Entry/exit prices, fees, cost estimates and PnL are excluded
+because those may legitimately change under cost stress. Equal trade count is not path
+equality. Reordered trades are a different path. The cost-monotonicity property is rejected
+as not applicable when fingerprints differ.
 
 ## 12. Benchmarks
 
@@ -113,6 +145,11 @@ fabricated zero.
 The allowed statuses are `INSUFFICIENT_DATA`, `FRAGILE`, `MIXED` and
 `ROBUST_CANDIDATE`. Rules declare minimum OOS trades, minimum positive-window ratio,
 minimum expectancy and maximum sensitivity dispersion. Component results remain visible.
+`RobustnessEvidenceRequirements` is frozen into the protocol and requires walk-forward,
+sensitivity and cost-stress evidence by default. Required sensitivity must contain baseline
+and non-baseline scenarios; required stress must contain baseline and stressed scenarios;
+required evidence must not be sample-insufficient. Missing or incomplete required evidence
+returns `MIXED` and can never produce `ROBUST_CANDIDATE`.
 `ROBUST_CANDIDATE` is historical evidence only and never means profitable or authorized
 for Demo/Live trading.
 
@@ -122,8 +159,13 @@ for Demo/Live trading.
 walk-forward windows, sensitivity, stress and benchmarks in append-only tables. Same ID
 plus identical bytes is idempotent. Same ID plus different bytes raises
 `PersistenceError`. Historical version sets are retained on the protocol, run, and every
-partition result. Repeated TEST consumption retains one immutable protocol identity while
-appending a distinct run/count; deterministic child identities are scoped to that run.
+partition result. `validation_test_consumptions` is an append-only ledger keyed by protocol
+and monotonic index, with unique deterministic event/run identities. `BEGIN IMMEDIATE`
+serializes read-next-index plus evidence/ledger insertion atomically. A retry with identical
+event ID/content returns its original record without incrementing; conflicting content
+fails. A new event receives `MAX(index)+1` even when its caller reused the original
+count-zero protocol. Unsupported older schemas fail explicitly during initialization;
+tables are never silently dropped and prior evidence is never deleted.
 
 ## 17. Dashboard
 

@@ -52,6 +52,13 @@ class ImplementationStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class RobustnessEvidenceRequirements:
+    require_walk_forward: bool = True
+    require_sensitivity: bool = True
+    require_cost_stress: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationRange:
     start: datetime
     end: datetime
@@ -217,6 +224,17 @@ class ValidationMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionPathFingerprint:
+    trade_count: int
+    fingerprint: str
+
+    def __post_init__(self) -> None:
+        if self.trade_count < 0:
+            raise DomainValidationError("execution path trade_count must be non-negative")
+        require_non_empty(self.fingerprint, "execution path fingerprint")
+
+
+@dataclass(frozen=True, slots=True)
 class PartitionResult:
     partition_result_id: str
     partition: PartitionType
@@ -260,6 +278,7 @@ class ValidationProtocol:
     cost_model_version: str
     funding_model_version: str
     instrument_metadata_version: str
+    robustness_evidence_requirements: RobustnessEvidenceRequirements
     allowed_sensitivity_dimensions: tuple[str, ...]
     state_policy: StateContinuityPolicy
     test_locked: bool
@@ -333,6 +352,33 @@ class WalkForwardSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class SensitivityEvaluation:
+    partition: PartitionType
+    evaluation_range: EvaluationRange
+    backtest_run_id: str
+    historical_versions: HistoricalVersionSet
+    strategy_version: str
+    config_version: str
+    execution_model_version: str
+    cost_model_version: str
+    funding_model_version: str
+    instrument_metadata_version: str
+    metrics: ValidationMetrics
+
+    def __post_init__(self) -> None:
+        for name in (
+            "backtest_run_id",
+            "strategy_version",
+            "config_version",
+            "execution_model_version",
+            "cost_model_version",
+            "funding_model_version",
+            "instrument_metadata_version",
+        ):
+            require_non_empty(getattr(self, name), name)
+
+
+@dataclass(frozen=True, slots=True)
 class SensitivityResult:
     sensitivity_id: str
     parameter: str
@@ -340,8 +386,7 @@ class SensitivityResult:
     perturbed_value: Decimal
     multiplier: Decimal
     is_baseline: bool
-    evaluation_partition: PartitionType
-    metrics: ValidationMetrics
+    evaluation: SensitivityEvaluation
 
     def __post_init__(self) -> None:
         require_non_empty(self.sensitivity_id, "sensitivity_id")
@@ -352,8 +397,16 @@ class SensitivityResult:
             raise DomainValidationError("sensitivity multiplier must be positive")
         if self.is_baseline != (self.multiplier == Decimal("1")):
             raise DomainValidationError("sensitivity baseline marker mismatch")
-        if self.evaluation_partition is PartitionType.TEST:
+        if self.evaluation.partition is PartitionType.TEST:
             raise DomainValidationError("final TEST cannot be used for sensitivity")
+
+    @property
+    def evaluation_partition(self) -> PartitionType:
+        return self.evaluation.partition
+
+    @property
+    def metrics(self) -> ValidationMetrics:
+        return self.evaluation.metrics
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +414,7 @@ class CostStressResult:
     stress_id: str
     multiplier: Decimal
     stressed_cost_model_version: str
+    execution_path: ExecutionPathFingerprint
     metrics: ValidationMetrics
 
     def __post_init__(self) -> None:
@@ -369,6 +423,22 @@ class CostStressResult:
         require_finite(self.multiplier, "stress multiplier")
         if self.multiplier < Decimal("1"):
             raise DomainValidationError("cost stress multiplier must be at least one")
+        if self.metrics.trade_count != self.execution_path.trade_count:
+            raise DomainValidationError("cost stress metrics/path trade count mismatch")
+
+
+@dataclass(frozen=True, slots=True)
+class TestConsumptionRecord:
+    protocol_id: str
+    consumption_event_id: str
+    consumption_index: int
+    validation_run_id: str
+
+    def __post_init__(self) -> None:
+        for name in ("protocol_id", "consumption_event_id", "validation_run_id"):
+            require_non_empty(getattr(self, name), name)
+        if self.consumption_index <= 0:
+            raise DomainValidationError("consumption_index must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,33 +523,56 @@ class ValidationRun:
     implementation_status: ImplementationStatus
     robustness_status: RobustnessStatus
     test_consumed: bool
+    test_consumption_event_id: str
+    test_consumption_index: int | None
     limitations: tuple[str, ...]
 
     def __post_init__(self) -> None:
         require_non_empty(self.validation_run_id, "validation_run_id")
+        require_non_empty(self.test_consumption_event_id, "test_consumption_event_id")
         if self.protocol.split_id != self.split.split_id:
             raise DomainValidationError("validation protocol/split mismatch")
         if self.protocol.historical_versions != self.historical_versions:
             raise DomainValidationError("validation protocol/historical version mismatch")
         if tuple(item.partition for item in self.partitions) != tuple(PartitionType):
             raise DomainValidationError("validation run requires ordered TRAIN/VALIDATION/TEST")
-        for result in self.partitions:
+        for partition_result in self.partitions:
             identities = (
-                result.strategy_version == self.protocol.strategy_version,
-                result.config_version == self.protocol.config_version,
-                result.execution_model_version == self.protocol.execution_model_version,
-                result.cost_model_version == self.protocol.cost_model_version,
-                result.funding_model_version == self.protocol.funding_model_version,
-                result.instrument_metadata_version == self.protocol.instrument_metadata_version,
-                result.historical_versions == self.historical_versions,
+                partition_result.strategy_version == self.protocol.strategy_version,
+                partition_result.config_version == self.protocol.config_version,
+                partition_result.execution_model_version == self.protocol.execution_model_version,
+                partition_result.cost_model_version == self.protocol.cost_model_version,
+                partition_result.funding_model_version == self.protocol.funding_model_version,
+                partition_result.instrument_metadata_version
+                == self.protocol.instrument_metadata_version,
+                partition_result.historical_versions == self.historical_versions,
             )
             if not all(identities):
                 raise DomainValidationError("validation partition changed frozen semantics")
-        if self.test_consumed != (self.protocol.test_evaluation_count > 0):
-            raise DomainValidationError("test consumption metadata mismatch")
+        for sensitivity_result in self.sensitivity:
+            evaluation = sensitivity_result.evaluation
+            identities = (
+                evaluation.historical_versions == self.historical_versions,
+                evaluation.strategy_version == self.protocol.strategy_version,
+                evaluation.config_version == self.protocol.config_version,
+                evaluation.execution_model_version == self.protocol.execution_model_version,
+                evaluation.cost_model_version == self.protocol.cost_model_version,
+                evaluation.funding_model_version == self.protocol.funding_model_version,
+                evaluation.instrument_metadata_version == self.protocol.instrument_metadata_version,
+            )
+            if not all(identities):
+                raise DomainValidationError("sensitivity changed frozen semantics")
         if not self.test_consumed:
             raise DomainValidationError("validation run must record final TEST consumption")
         if self.test_consumed and not self.protocol.test_locked:
             raise DomainValidationError("TEST consumption requires protocol lock")
+        if self.test_consumption_index is None:
+            if self.protocol.test_evaluation_count != 0:
+                raise DomainValidationError("unpersisted TEST consumption count must be zero")
+        elif (
+            self.test_consumption_index <= 0
+            or self.protocol.test_evaluation_count != self.test_consumption_index
+        ):
+            raise DomainValidationError("persisted TEST consumption index/count mismatch")
         if not self.limitations:
             raise DomainValidationError("validation run must disclose limitations")
