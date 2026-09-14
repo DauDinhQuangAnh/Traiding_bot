@@ -74,8 +74,10 @@ partition reports; a boundary policy must be explicit in each run. Metrics start
 ## 9. Final test policy
 
 `ValidationProtocol` freezes code, strategy, config, split, execution, cost, funding,
-instrument, sensitivity/stress/walk-forward specifications and whether TEST is locked.
-Consuming TEST records `test_consumed` and increments an auditable evaluation count.
+instrument, historical M5/M15/H1/snapshot versions, sensitivity/stress/walk-forward
+specifications and whether TEST is locked. A protocol starts with an unconsumed count;
+successfully consuming TEST records `test_consumed` and increments an auditable
+evaluation count.
 Changing any semantic input creates a different protocol/run identity; existing TEST
 evidence is append-only and never overwritten. The software makes contamination visible,
 but cannot prevent a developer from creating a deliberately new protocol.
@@ -92,7 +94,8 @@ expectancy is trade-weighted; median window expectancy is also separate.
 ## 11. Allowed parameter sensitivity
 
 Sensitivity uses a small, declared list of existing scalar config paths and explicit
-Decimal multipliers/values. The baseline appears exactly once. Invalid perturbations fail
+Decimal multipliers/values. The baseline appears exactly once, the final TEST partition is
+forbidden, and the default local deviation bound is ±5%. Invalid perturbations fail
 configuration validation; bounds are not silently clamped. Outputs retain parameter,
 baseline and perturbed values plus OOS metrics. Results preserve declaration order and
 never rank, recommend, apply or persist a winner. Final TEST is not used for sensitivity.
@@ -109,10 +112,11 @@ mutation.
 Declared non-negative Decimal multipliers (baseline exactly `1`) stress spread,
 slippage and fees through existing PHASE 5 configuration and execution semantics.
 Funding is a separate explicit dimension. Price-deviation tolerance does not expand.
-Higher friction may reject trades, so every metric need not be monotonic; for an identical
-executed path, additional non-negative costs must not manufacture accounting gains.
-Stress results retain unchanged strategy/config identity plus explicit stressed-cost
-identity and never replace the baseline.
+The typed result boundary rejects changes to frozen non-cost semantics. Higher friction
+may reject trades, so every metric need not be monotonic; for an identical executed path,
+additional non-negative costs must not manufacture accounting gains. Stress results retain
+unchanged strategy/config identity plus explicit stressed-cost identity and never replace
+the baseline.
 
 ## 14. Robustness metrics and classification
 
@@ -135,7 +139,8 @@ prediction; dependence and regime clustering remain documented limitations.
 
 The same OOS range includes deterministic flat/no-trade and buy-and-hold comparisons.
 Buy-and-hold uses an explicit first-entry/final-exit policy and existing modeled
-transaction costs without future knowledge. Reports compare return, drawdown, descriptive
+transaction costs without future knowledge. Entry and final-exit costs are included in the
+benchmark equity path and drawdown. Reports compare return, drawdown, descriptive
 return/drawdown ratio, exposure and costs; they do not rank solely by net PnL.
 
 ## 17. Dashboard architecture

@@ -24,8 +24,10 @@ machine learning. Dates are explicit inputs and part of `split_id`.
 Every `PartitionWindow` distinguishes `data_start` from `evaluation.start/end`. The
 minimum duration is derived deterministically from existing EMA/RSI/ATR/ADX/Bollinger,
 percentile, volume and structure requirements via `required_bars()`, converted using the
-M5/M15/H1 intervals. A smaller requested duration fails closed. Warmup trades and PnL are
-excluded by entry timestamp from official partition metrics.
+M5/M15/H1 intervals. A smaller requested duration fails closed. Replay over warmup may
+build market state, but only decisions at or after `evaluation.start` reach the backtest
+engine. Warmup therefore cannot create economic trades, portfolio/risk state or official
+performance for the partition.
 
 ## 5. State continuity
 
@@ -43,19 +45,20 @@ The durations, boundaries and policy are versioned in the split identity.
 
 ## 7. Final test policy
 
-TEST execution requires `test_locked=True` and a positive auditable
-`test_evaluation_count`. Code, strategy, config, split, execution, cost, funding and
-instrument identities are frozen in `ValidationProtocol`. A semantic mismatch fails
-before any backtest. New semantics require a new protocol identity; stored evidence is
-never silently replaced.
+TEST execution requires `test_locked=True`. A new frozen protocol begins with
+`test_evaluation_count=0`; a successful baseline run increments the count in its immutable
+result. Code, strategy, config, split, historical M5/M15/H1/snapshot versions, execution,
+cost, funding and instrument identities are frozen in `ValidationProtocol`. A semantic
+mismatch fails before any backtest. New semantics require a new protocol identity; stored
+evidence is never silently replaced.
 
 ## 8. Validation identity
 
 `validation_run_id` is content-derived from protocol, split, historical M5/M15/H1 and
 snapshot versions, walk-forward declarations, sensitivity dimensions, stress assumptions,
 bootstrap identity and benchmarks. Protocol identity covers code, strategy, config,
-execution, costs, funding, metadata, split, lock and state policy. Machine paths, wall
-clock and random UUIDs are excluded.
+historical versions, execution, costs, funding, metadata, split, lock and state policy.
+Machine paths, wall clock and random UUIDs are excluded.
 
 ## 9. Walk-forward
 
@@ -68,17 +71,19 @@ and overall PF from aggregated gross profit/loss—not the mean of PF values.
 ## 10. Sensitivity
 
 `SensitivitySpec` accepts one existing declared scalar parameter, its Decimal baseline
-and a small unique multiplier sequence. Multiplier `1` must occur exactly once. Results
-preserve input order and record every perturbation. No field, function or pipeline selects,
-ranks, recommends or applies a winner, and sensitivity is not run against final TEST.
+and a small unique multiplier sequence. Multiplier `1` must occur exactly once and every
+perturbation must stay within the explicit local deviation bound (±5% by default). Results
+record a non-TEST evaluation partition, preserve input order and record every perturbation.
+No field, function or pipeline selects, ranks, recommends or applies a winner.
 
 ## 11. Cost stress
 
 `CostStressSpec` versions explicit multipliers of at least `1` for spread, slippage, fees
-and optionally funding. Evaluation reuses PHASE 5 cost/fill semantics and does not widen
-price-deviation tolerance. When the executed trade path is unchanged, higher total costs
-cannot improve net PnL. If friction changes entry acceptance, non-monotonic trade-level
-metrics are reported rather than disguised.
+and optionally funding. Typed evaluation verifies frozen strategy/config/execution/
+instrument semantics and does not widen price-deviation tolerance. Funding identity may
+change only when funding is the declared stress dimension. When the executed trade path is
+unchanged, higher total costs cannot improve net PnL. If friction changes entry acceptance,
+non-monotonic trade-level metrics are reported rather than disguised.
 
 ## 12. Benchmarks
 
@@ -93,7 +98,8 @@ The optional trade bootstrap is deterministic: seed, iterations, minimum sample 
 inputs are included in identity. SHA-256-derived draw indices avoid unseeded or runtime
 global randomness. It reports descriptive expectancy-R and net-PnL percentiles. Too few
 trades return unavailable values. IID resampling ignores dependence and clustering and is
-not a price-path simulation or forecast.
+not a price-path simulation or forecast. Profit-factor intervals are reported only for
+resamples with a defined loss denominator.
 
 ## 14. Sample size
 
@@ -115,7 +121,9 @@ for Demo/Live trading.
 `SQLiteValidationRepository` stores canonical protocols, validation runs, partitions,
 walk-forward windows, sensitivity, stress and benchmarks in append-only tables. Same ID
 plus identical bytes is idempotent. Same ID plus different bytes raises
-`PersistenceError`. Historical version sets are retained on every partition result.
+`PersistenceError`. Historical version sets are retained on the protocol, run, and every
+partition result. Repeated TEST consumption retains one immutable protocol identity while
+appending a distinct run/count; deterministic child identities are scoped to that run.
 
 ## 17. Dashboard
 
@@ -150,4 +158,3 @@ walk-forward, correct aggregation, sensitivity without selection, cost stress, s
 groups, deterministic bootstrap, flat/buy-hold benchmarks, immutable SQLite evidence and
 read-only dashboard behavior. Existing PHASE 1–5 tests and all Python quality gates must
 pass on the exact final commit. PHASE 6 stays unapproved until explicit human review.
-

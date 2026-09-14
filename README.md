@@ -12,7 +12,7 @@ an toàn không đủ rõ ràng.
 - PHASE 3 — Deterministic Offline Core: **APPROVED after remediation**
 - PHASE 4 — Historical Data Foundation: **APPROVED after version-identity remediation**
 - PHASE 5 — Backtest Engine: **APPROVED after final Decimal-determinism closure**
-- PHASE 6 — Out-of-Sample Validation and Local Dashboard: **IN PROGRESS / NOT YET APPROVED**
+- PHASE 6 — Out-of-Sample Validation and Local Dashboard: **APPROVED_CANDIDATE / UNDER HUMAN REVIEW**
 - Phạm vi thị trường dự kiến: `BTC-USDT-SWAP`, OKX Demo Trading
 - Live trading: **không thuộc phạm vi hiện tại và phải luôn mặc định tắt**
 - Repository có package Python chạy offline; không có mã kết nối hoặc gửi lệnh tới OKX.
@@ -71,7 +71,8 @@ API key, network I/O, order submission, trading loop và live trading vẫn ngo�
 
 ## PHASE 6
 
-- Status: **IN PROGRESS / NOT YET APPROVED**.
+- Status: **APPROVED_CANDIDATE / UNDER HUMAN REVIEW**. Final approval remains blocked on
+  exact-final-commit Python 3.12 CI and explicit external human review.
 - [Implementation plan](docs/phase-6-plan.md)
 - [Validation contract](docs/validation.md)
 - [Implementation review](docs/phase-6-review.md)
