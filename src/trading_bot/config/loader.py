@@ -14,6 +14,8 @@ from typing import Any, TypeVar, cast
 import yaml
 
 from trading_bot.config.models import (
+    AIConfig,
+    AIProviderConfig,
     AppConfig,
     BacktestConfig,
     CalculationConfig,
@@ -167,6 +169,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
         "data",
         "historical",
         "backtest",
+        "ai",
         "journal",
         "monitoring",
     }
@@ -204,6 +207,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
     data_config = _data(_map(raw["data"], "data"))
     historical_config = _historical(_map(raw["historical"], "historical"))
     backtest_config = _backtest(_map(raw["backtest"], "backtest"))
+    ai_config = _ai(_map(raw["ai"], "ai"))
     journal_config = _journal(_map(raw["journal"], "journal"))
     monitoring_config = _monitoring(_map(raw["monitoring"], "monitoring"))
     return AppConfig(
@@ -219,6 +223,7 @@ def app_config_from_mapping(raw_value: Mapping[str, Any]) -> AppConfig:
         data_config,
         historical_config,
         backtest_config,
+        ai_config,
         journal_config,
         monitoring_config,
     )
@@ -798,6 +803,52 @@ def _backtest(raw: Mapping[str, Any]) -> BacktestConfig:
         execution_model_version=str(raw["execution_model_version"]),
         spread_model_version=str(raw["spread_model_version"]),
         funding_algorithm_version=str(raw["funding_algorithm_version"]),
+    )
+
+
+def _ai(raw: Mapping[str, Any]) -> AIConfig:
+    expected = {
+        "enabled",
+        "max_candles_per_timeframe",
+        "max_observations",
+        "max_reason_codes",
+        "max_text_length",
+        "providers",
+    }
+    _keys(raw, expected, "ai")
+    provider_values = _map(raw["providers"], "ai.providers")
+    _keys(provider_values, {"OPENAI", "ANTHROPIC", "GEMINI"}, "ai.providers")
+    providers: dict[str, AIProviderConfig] = {}
+    provider_fields = set(AIProviderConfig.__dataclass_fields__)
+    for name, value in provider_values.items():
+        provider = _map(value, f"ai.providers.{name}")
+        _keys(provider, provider_fields, f"ai.providers.{name}")
+        providers[name] = AIProviderConfig(
+            enabled=_boolean(provider["enabled"], f"ai.providers.{name}.enabled"),
+            model=str(provider["model"]),
+            temperature=_decimal(provider["temperature"], f"ai.providers.{name}.temperature"),
+            max_output_tokens=int(provider["max_output_tokens"]),
+            timeout=_duration(provider["timeout"], f"ai.providers.{name}.timeout"),
+            max_attempts=int(provider["max_attempts"]),
+            initial_backoff=_duration(
+                provider["initial_backoff"], f"ai.providers.{name}.initial_backoff"
+            ),
+            backoff_multiplier=_decimal(
+                provider["backoff_multiplier"],
+                f"ai.providers.{name}.backoff_multiplier",
+            ),
+            maximum_backoff=_duration(
+                provider["maximum_backoff"], f"ai.providers.{name}.maximum_backoff"
+            ),
+            config_version=str(provider["config_version"]),
+        )
+    return AIConfig(
+        enabled=_boolean(raw["enabled"], "ai.enabled"),
+        max_candles_per_timeframe=int(raw["max_candles_per_timeframe"]),
+        max_observations=int(raw["max_observations"]),
+        max_reason_codes=int(raw["max_reason_codes"]),
+        max_text_length=int(raw["max_text_length"]),
+        providers=providers,
     )
 
 

@@ -800,6 +800,62 @@ class BacktestConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AIProviderConfig:
+    enabled: bool
+    model: str
+    temperature: Decimal
+    max_output_tokens: int
+    timeout: timedelta
+    max_attempts: int
+    initial_backoff: timedelta
+    backoff_multiplier: Decimal
+    maximum_backoff: timedelta
+    config_version: str
+
+    def __post_init__(self) -> None:
+        if not self.model.strip() or not self.config_version.strip():
+            _error("AI provider model and config_version must be non-empty")
+        _non_negative_decimal(self.temperature, "AI provider temperature")
+        if self.temperature > Decimal("2"):
+            _error("AI provider temperature must not exceed 2")
+        _positive_int(self.max_output_tokens, "AI provider max_output_tokens")
+        _positive_duration(self.timeout, "AI provider timeout")
+        if not 1 <= self.max_attempts <= 10:
+            _error("AI provider max_attempts must be in [1,10]")
+        _positive_duration(self.initial_backoff, "AI provider initial_backoff")
+        _finite(self.backoff_multiplier, "AI provider backoff_multiplier")
+        if self.backoff_multiplier < ONE:
+            _error("AI provider backoff_multiplier must be at least one")
+        if self.maximum_backoff < self.initial_backoff:
+            _error("AI provider maximum_backoff must not be below initial_backoff")
+
+
+@dataclass(frozen=True, slots=True)
+class AIConfig:
+    enabled: bool
+    max_candles_per_timeframe: int
+    max_observations: int
+    max_reason_codes: int
+    max_text_length: int
+    providers: Mapping[str, AIProviderConfig]
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.max_candles_per_timeframe <= 100:
+            _error("AI max_candles_per_timeframe must be in [1,100]")
+        if not 1 <= self.max_observations <= 200:
+            _error("AI max_observations must be in [1,200]")
+        if not 1 <= self.max_reason_codes <= 50:
+            _error("AI max_reason_codes must be in [1,50]")
+        if not 16 <= self.max_text_length <= 500:
+            _error("AI max_text_length must be in [16,500]")
+        if set(self.providers) != {"OPENAI", "ANTHROPIC", "GEMINI"}:
+            _error("AI providers must contain exactly OPENAI, ANTHROPIC, and GEMINI")
+        object.__setattr__(self, "providers", freeze_mapping(self.providers))
+        if not self.enabled and any(item.enabled for item in self.providers.values()):
+            _error("AI providers cannot be enabled while global AI is disabled")
+
+
+@dataclass(frozen=True, slots=True)
 class JournalConfig:
     backend: JournalBackend
     database_path: Path
@@ -849,6 +905,7 @@ class AppConfig:
     data: DataConfig
     historical: HistoricalConfig
     backtest: BacktestConfig
+    ai: AIConfig
     journal: JournalConfig
     monitoring: MonitoringConfig
 

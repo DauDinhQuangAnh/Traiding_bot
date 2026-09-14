@@ -175,6 +175,16 @@ backtest:
   execution_model_version: backtest-execution-v1
   spread_model_version: symmetric-spread-v1
   funding_algorithm_version: perpetual-funding-v1
+ai:
+  enabled: false
+  max_candles_per_timeframe: 20
+  max_observations: 100
+  max_reason_codes: 20
+  max_text_length: 240
+  providers:
+    OPENAI: {enabled: false, model: unconfigured-openai-model, temperature: "0", max_output_tokens: 500, timeout: 30s, max_attempts: 3, initial_backoff: 1s, backoff_multiplier: "2", maximum_backoff: 8s, config_version: openai-provider-v1}
+    ANTHROPIC: {enabled: false, model: unconfigured-anthropic-model, temperature: "0", max_output_tokens: 500, timeout: 30s, max_attempts: 3, initial_backoff: 1s, backoff_multiplier: "2", maximum_backoff: 8s, config_version: anthropic-provider-v1}
+    GEMINI: {enabled: false, model: unconfigured-gemini-model, temperature: "0", max_output_tokens: 500, timeout: 30s, max_attempts: 3, initial_backoff: 1s, backoff_multiplier: "2", maximum_backoff: 8s, config_version: gemini-provider-v1}
 journal:
   backend: SQLITE
   database_path: var/trading_bot.db

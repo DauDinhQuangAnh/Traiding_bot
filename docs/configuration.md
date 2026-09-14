@@ -46,6 +46,7 @@ changes must not churn data versions.
 | `protection` | Stop/TP validation và failure actions |
 | `data` | Timeframes, warm-up, freshness, gap/backfill policy |
 | `historical` | Offline parser, normalization, mapping and dataset policies |
+| `ai` | Disabled-by-default advisory projection and provider benchmark policy |
 | `journal` | SQLite path, append/audit behavior, retention |
 | `monitoring` | Health thresholds, alerts, reconciliation cadence |
 
@@ -321,7 +322,31 @@ All numeric YAML values use quoted Decimal strings. These development values are
 reproducible assumptions, not current venue facts. M5, worst-case ambiguity, adverse
 gap handling, funding-mode coherence, and halt-stop behavior are cross-field enforced.
 
-### 4.13 `journal`
+### 4.13 `ai`
+
+| Key | Type | Class | Validation/meaning |
+|---|---|---|---|
+| `ai.enabled` | `bool` | DEFAULT_FOR_DEVELOPMENT | Must default false; it never grants trading authority |
+| `ai.max_candles_per_timeframe` | `int` | DEFAULT_FOR_DEVELOPMENT | Bounded `[1,100]` |
+| `ai.max_observations` | `int` | DEFAULT_FOR_DEVELOPMENT | Bounded `[1,200]` |
+| `ai.max_reason_codes` | `int` | DEFAULT_FOR_DEVELOPMENT | Bounded `[1,50]` |
+| `ai.max_text_length` | `int` | DEFAULT_FOR_DEVELOPMENT | Bounded `[16,500]` |
+| `ai.providers` | `Mapping[str,AIProviderConfig]` | DEFAULT_FOR_DEVELOPMENT | Exact keys `OPENAI`, `ANTHROPIC`, `GEMINI` |
+| `ai.providers.*.enabled` | `bool` | DEFAULT_FOR_DEVELOPMENT | Defaults false; forbidden while global AI is false |
+| `ai.providers.*.model` | `str` | BACKTEST_REQUIRED | Exact non-empty experiment label; examples are placeholders |
+| `ai.providers.*.temperature` | `Decimal` | BACKTEST_REQUIRED | `[0,2]`, quoted YAML Decimal |
+| `ai.providers.*.max_output_tokens` | `int` | DEFAULT_FOR_DEVELOPMENT | Positive bound |
+| `ai.providers.*.timeout` | `Duration` | DEFAULT_FOR_DEVELOPMENT | Positive |
+| `ai.providers.*.max_attempts` | `int` | DEFAULT_FOR_DEVELOPMENT | Bounded `[1,10]` |
+| `ai.providers.*.initial_backoff` | `Duration` | DEFAULT_FOR_DEVELOPMENT | Positive |
+| `ai.providers.*.backoff_multiplier` | `Decimal` | DEFAULT_FOR_DEVELOPMENT | At least 1 |
+| `ai.providers.*.maximum_backoff` | `Duration` | DEFAULT_FOR_DEVELOPMENT | At least initial backoff |
+| `ai.providers.*.config_version` | `str` | DEFAULT_FOR_DEVELOPMENT | Non-empty provider-policy identity |
+
+No credential field exists in typed AI config. Provider specs are observational and do
+not enable network, trading, or strategy feedback.
+
+### 4.14 `journal`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
@@ -332,7 +357,7 @@ gap handling, funding-mode coherence, and halt-stop behavior are cross-field enf
 | `journal.busy_timeout` | `Duration` | BACKTEST_REQUIRED | Positive |
 | `journal.retention_days` | optional int | DEFAULT_FOR_DEVELOPMENT | Mặc định null nghĩa giữ vô hạn; không xóa audit đang dùng |
 
-### 4.14 `monitoring`
+### 4.15 `monitoring`
 
 | Key | Type | Class | Validation/meaning |
 |---|---|---|---|
@@ -394,7 +419,7 @@ Bất kỳ field hoặc cross-field rule nào fail đều phát `CONFIG_INVALID`
 | Configuration class | Storage | Examples | Logging/Git rule |
 |---|---|---|---|
 | Normal application config | Versioned YAML | symbol, periods, thresholds, limits, policies | Có thể commit; journal bằng config hash |
-| Secret config | Environment hoặc local `.env` | `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSPHRASE` | Không commit, hash, exception, log hoặc journal plaintext |
+| Secret config | Environment hoặc local `.env` | `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSPHRASE`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` | Không commit, hash, exception, log hoặc journal plaintext |
 
 Demo credential không được có withdrawal permission. `.env` chỉ dành local và nằm
 trong `.gitignore`. Logger/error serializer phải redact theo secret field names và
