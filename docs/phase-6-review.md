@@ -2,16 +2,21 @@
 
 ## IMPLEMENTATION STATUS
 
-`NEEDS_WORK`
+`APPROVED_CANDIDATE`
 
-The implementation is an `APPROVED_CANDIDATE` based on the completed human-style code
-audit and local quality gates. Formal closure remains `NEEDS_WORK` until Python 3.12 CI
-passes on the exact final remediation commit and an external human approves PHASE 6.
-This document does not self-declare final approval.
+The implementation is an `APPROVED_CANDIDATE` based on the completed external-review
+remediation, local quality gates, and exact implementation-commit Python 3.12 CI. Final
+`APPROVED` remains reserved for external human review. This document does not self-declare
+final approval.
 
-Current final pre-remediation commit:
-`d91991b8301319041eb5bbb23d1cdf0562195cd4`. External review verified GitHub Actions
-workflow `Python quality gates`, run #8, job `python-312`, SUCCESS for that exact SHA.
+Current reviewed implementation commit:
+`211c97b28c2b1e6095a2f8a3b495fe6f4d4b2214` (`fix: finalize phase 6 evidence
+integrity`). GitHub Actions workflow `Python quality gates`, run #9, job `python-312`,
+completed SUCCESS for that exact SHA.
+
+Run evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34808005005
+
+Job evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34808005005/job/103863571706
 
 The original implementation commit `ccd7249bbd1757effbf3863417167bbbcde1d86a`
 passed GitHub Actions workflow `Python quality gates`, run #7, job `python-312`:
@@ -22,7 +27,7 @@ Job evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34586
 
 The first audit found correctness gaps and closed them in remediation commit
 `cd38d1149780ad10146ae17b9d9c0cf0f77bfa8b`. Final evidence-integrity remediation after
-external review is locally complete but does not yet have an exact commit or CI result.
+external review is `211c97b28c2b1e6095a2f8a3b495fe6f4d4b2214`.
 
 Local evidence after final remediation: 268 tests passed. Overall branch-aware coverage
 is 86%. Critical changed-module coverage is validation pipeline 97%, robustness 100%,
@@ -127,7 +132,8 @@ No unresolved blocking correctness finding remains in the audited local implemen
 | Full regression suite | PASS locally | 268 tests; no prior test disabled. |
 | Branch-aware coverage | PASS locally | 86% overall; pipeline 97%, robustness 100%, stress 98%, sensitivity 94%, SQLite 98%. |
 | Ruff, mypy, compileall | PASS locally | All project commands pass. |
-| Exact final-remediation Python 3.12 CI | PENDING | New remediation commit is not yet pushed; run #8 belongs only to `d91991b`. |
+| Exact implementation-remediation Python 3.12 CI | PASS | `211c97b`; run #9, job `python-312`, SUCCESS. |
+| Exact final evidence-commit Python 3.12 CI | PENDING | This documentation update requires its own run; run #9 belongs only to `211c97b`. |
 | External human review | PENDING | Required before `APPROVED`. |
 
 ## Limitations and interpretation
