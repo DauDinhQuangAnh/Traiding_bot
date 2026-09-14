@@ -10,6 +10,7 @@ from trading_bot.validation.benchmarks import buy_and_hold_benchmark, flat_bench
 from trading_bot.validation.metrics import project_validation_metrics
 from trading_bot.validation.models import (
     CostStressResult,
+    PartitionType,
     RobustnessStatus,
     SensitivityResult,
     WalkForwardWindow,
@@ -18,6 +19,7 @@ from trading_bot.validation.models import (
 from trading_bot.validation.robustness import RobustnessRules, classify_robustness
 from trading_bot.validation.sensitivity import SensitivitySpec, evaluate_sensitivity
 from trading_bot.validation.stress import (
+    CostStressEvaluation,
     CostStressSpec,
     evaluate_cost_stress,
     unchanged_path_cost_monotonic,
@@ -51,6 +53,7 @@ def test_sensitivity_contains_baseline_once_and_never_selects_winner(app_config)
 
     assert sum(result.is_baseline for result in results) == 1
     assert tuple(result.perturbed_value for result in results) == (D("57"), D("60"), D("63"))
+    assert all(result.evaluation_partition is PartitionType.VALIDATION for result in results)
     assert all(not hasattr(result, "selected") for result in results)
 
 
@@ -73,10 +76,39 @@ def test_sensitivity_rejects_missing_or_duplicate_baseline():
         SensitivitySpec("threshold", D("60"), (D("1"), D("1")))
 
 
+def test_sensitivity_rejects_final_test_and_non_local_perturbations():
+    with pytest.raises(DomainValidationError, match="final TEST"):
+        SensitivitySpec(
+            "threshold",
+            D("60"),
+            (D("0.95"), D("1"), D("1.05")),
+            evaluation_partition=PartitionType.TEST,
+        )
+    with pytest.raises(DomainValidationError, match="remain local"):
+        SensitivitySpec("threshold", D("60"), (D("0.9"), D("1"), D("1.1")))
+
+
 def test_cost_stress_versions_every_assumption():
     spec = CostStressSpec((D("1"), D("1.5"), D("2")))
+    protocol = validation_run().protocol
+
+    def evaluate(value):
+        return CostStressEvaluation(
+            f"cost-{value}",
+            protocol.strategy_version,
+            protocol.config_version,
+            protocol.execution_model_version,
+            protocol.funding_model_version,
+            protocol.instrument_metadata_version,
+            D("0.01"),
+            _metrics(str(D("20") / value), "-5"),
+        )
+
     results = evaluate_cost_stress(
-        "protocol", spec, lambda value: (f"cost-{value}", _metrics(str(D("20") / value), "-5"))
+        protocol,
+        spec,
+        D("0.01"),
+        evaluate,
     )
 
     assert tuple(result.multiplier for result in results) == spec.multipliers
@@ -96,6 +128,26 @@ def test_cost_stress_invalid_specs_fail_closed():
             stress_fees=False,
             stress_funding=False,
         )
+
+
+def test_cost_stress_rejects_non_cost_semantic_changes():
+    protocol = validation_run().protocol
+    spec = CostStressSpec((D("1"), D("2")))
+
+    def evaluate(multiplier):
+        return CostStressEvaluation(
+            f"cost-{multiplier}",
+            "mutated-strategy",
+            protocol.config_version,
+            protocol.execution_model_version,
+            protocol.funding_model_version,
+            protocol.instrument_metadata_version,
+            D("0.01"),
+            _metrics("10", "-5"),
+        )
+
+    with pytest.raises(DomainValidationError, match="non-cost semantics"):
+        evaluate_cost_stress(protocol, spec, D("0.01"), evaluate)
 
 
 def test_unchanged_path_higher_cost_cannot_create_accounting_gain():
@@ -121,6 +173,7 @@ def test_seeded_bootstrap_is_exactly_reproducible_and_seeded_in_identity(app_con
     assert canonical_json(first) == canonical_json(repeated)
     assert first.bootstrap_id != changed.bootstrap_id
     assert first.expectancy_r_median is not None
+    assert first.profit_factor_median is not None
     assert changed.expectancy_r_median is not None
 
 
@@ -135,6 +188,7 @@ def test_bootstrap_is_unavailable_for_insufficient_sample(app_config):
 
     assert result.expectancy_r_median is None
     assert result.net_pnl_median is None
+    assert result.profit_factor_median is None
 
 
 def test_flat_and_buy_hold_benchmarks_use_same_oos_range_and_costs(app_config):
@@ -150,7 +204,7 @@ def test_flat_and_buy_hold_benchmarks_use_same_oos_range_and_costs(app_config):
     assert buy_hold.net_pnl == D("178")
     assert buy_hold.return_ratio == D("0.178")
     assert buy_hold.total_costs == D("22")
-    assert buy_hold.maximum_drawdown == D("0")
+    assert buy_hold.maximum_drawdown == D("12")
 
 
 def test_buy_hold_reports_drawdown_and_rejects_invalid_marks(app_config):
@@ -230,7 +284,16 @@ def test_sensitivity_and_cost_failures_classify_as_fragile():
     rules = RobustnessRules(2, D("0.5"), D("0"), D("0.1"))
     healthy = _metrics("20", "10")
     sensitivity = (
-        SensitivityResult("s1", "threshold", D("60"), D("60"), D("1"), True, healthy),
+        SensitivityResult(
+            "s1",
+            "threshold",
+            D("60"),
+            D("60"),
+            D("1"),
+            True,
+            PartitionType.VALIDATION,
+            healthy,
+        ),
         SensitivityResult(
             "s2",
             "threshold",
@@ -238,6 +301,7 @@ def test_sensitivity_and_cost_failures_classify_as_fragile():
             D("61"),
             D("1.016"),
             False,
+            PartitionType.VALIDATION,
             replace(healthy, expectancy_r=D("-1")),
         ),
     )
@@ -267,3 +331,14 @@ def test_walk_forward_aggregation_weights_expectancy_and_aggregates_raw_profit()
     assert summary.median_window_expectancy_r == D("1")
     assert summary.weighted_expectancy_r == D("0.6666666666666666666666666666666667")
     assert summary.aggregate_profit_factor == D("3")
+
+
+def test_walk_forward_weighted_expectancy_excludes_only_undefined_samples():
+    defined = _metrics("20", "10")
+    undefined = replace(_metrics(), trade_count=7, expectancy_r=None)
+
+    summary = summarize_walk_forward(
+        (_window_result(defined), _window_result(undefined)), CALCULATION
+    )
+
+    assert summary.weighted_expectancy_r == defined.expectancy_r

@@ -255,6 +255,7 @@ class ValidationProtocol:
     strategy_version: str
     config_version: str
     split_id: str
+    historical_versions: HistoricalVersionSet
     execution_model_version: str
     cost_model_version: str
     funding_model_version: str
@@ -339,6 +340,7 @@ class SensitivityResult:
     perturbed_value: Decimal
     multiplier: Decimal
     is_baseline: bool
+    evaluation_partition: PartitionType
     metrics: ValidationMetrics
 
     def __post_init__(self) -> None:
@@ -350,6 +352,8 @@ class SensitivityResult:
             raise DomainValidationError("sensitivity multiplier must be positive")
         if self.is_baseline != (self.multiplier == Decimal("1")):
             raise DomainValidationError("sensitivity baseline marker mismatch")
+        if self.evaluation_partition is PartitionType.TEST:
+            raise DomainValidationError("final TEST cannot be used for sensitivity")
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,6 +413,9 @@ class BootstrapResult:
     net_pnl_median: Decimal | None
     net_pnl_p05: Decimal | None
     net_pnl_p95: Decimal | None
+    profit_factor_median: Decimal | None
+    profit_factor_p05: Decimal | None
+    profit_factor_p95: Decimal | None
 
     def __post_init__(self) -> None:
         require_non_empty(self.bootstrap_id, "bootstrap_id")
@@ -421,6 +428,9 @@ class BootstrapResult:
             "net_pnl_median",
             "net_pnl_p05",
             "net_pnl_p95",
+            "profit_factor_median",
+            "profit_factor_p05",
+            "profit_factor_p95",
         ):
             value = getattr(self, name)
             if value is not None:
@@ -449,6 +459,8 @@ class ValidationRun:
         require_non_empty(self.validation_run_id, "validation_run_id")
         if self.protocol.split_id != self.split.split_id:
             raise DomainValidationError("validation protocol/split mismatch")
+        if self.protocol.historical_versions != self.historical_versions:
+            raise DomainValidationError("validation protocol/historical version mismatch")
         if tuple(item.partition for item in self.partitions) != tuple(PartitionType):
             raise DomainValidationError("validation run requires ordered TRAIN/VALIDATION/TEST")
         for result in self.partitions:
@@ -465,6 +477,8 @@ class ValidationRun:
                 raise DomainValidationError("validation partition changed frozen semantics")
         if self.test_consumed != (self.protocol.test_evaluation_count > 0):
             raise DomainValidationError("test consumption metadata mismatch")
+        if not self.test_consumed:
+            raise DomainValidationError("validation run must record final TEST consumption")
         if self.test_consumed and not self.protocol.test_locked:
             raise DomainValidationError("TEST consumption requires protocol lock")
         if not self.limitations:

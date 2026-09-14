@@ -54,6 +54,7 @@ def _inputs(app_config):
         strategy_version=versions.strategy_version,
         config_version=versions.config_version,
         split_id=split.split_id,
+        historical_versions=HISTORICAL,
         execution_model_version=execution_model_version(
             app_config.backtest,
             app_config.execution,
@@ -68,10 +69,29 @@ def _inputs(app_config):
 
 
 def _runner(split, test_pnl):
-    def run(repository, _symbol, historical, start, end, _config, versions, instrument, _provider):
-        repository.get_candles("BTC-USDT-SWAP", None, start - timedelta(days=1), end, "v")
+    def run(
+        repository,
+        _symbol,
+        historical,
+        start,
+        end,
+        _config,
+        versions,
+        instrument,
+        _provider,
+        *,
+        state_warmup_start_time=None,
+    ):
+        assert state_warmup_start_time is not None
+        repository.get_candles(
+            "BTC-USDT-SWAP",
+            None,
+            state_warmup_start_time - timedelta(days=1),
+            end,
+            "v",
+        )
         latest = repository.latest_before("BTC-USDT-SWAP", None, end, 2, "v")
-        assert all(item.open_time >= start for item in latest)
+        assert all(item.open_time >= state_warmup_start_time for item in latest)
         trades = [trade(0, "10", opened=split.train.start)]
         if end >= split.validation.end:
             trades.append(trade(1, "20", opened=split.validation.start))
@@ -126,6 +146,7 @@ def test_baseline_pipeline_uses_frozen_semantics_and_declared_data_boundary(
     assert len(set(repository.requested_starts)) == 1
     assert repository.requested_starts[0] == result.partitions[0].window.data_start
     assert result.test_consumed and result.protocol.test_locked
+    assert result.protocol.test_evaluation_count == 1
 
 
 def test_future_test_change_cannot_affect_train_or_validation(app_config, monkeypatch):
@@ -176,6 +197,36 @@ def test_protocol_semantic_mismatch_fails_before_any_backtest(app_config):
             replace(protocol, strategy_version="mutated-after-test"),
             app_config,
             versions,
+            instrument,
+            minimum_sample_size=1,
+            funding_provider=provider,
+        )
+
+    assert repository.requested_starts == []
+
+
+@pytest.mark.parametrize(
+    ("protocol_change", "version_change"),
+    (
+        ({"code_version": "different-code"}, {}),
+        ({}, {"data_version": "different-history"}),
+    ),
+)
+def test_code_and_historical_semantic_mismatch_fail_before_backtest(
+    app_config, protocol_change, version_change
+):
+    split, protocol, versions, instrument, provider = _inputs(app_config)
+    repository = _RecordingRepository()
+
+    with pytest.raises(DomainValidationError, match="semantic identity mismatch"):
+        run_baseline_validation(
+            repository,
+            "BTC-USDT-SWAP",
+            HISTORICAL,
+            split,
+            replace(protocol, **protocol_change),
+            app_config,
+            replace(versions, **version_change),
             instrument,
             minimum_sample_size=1,
             funding_provider=provider,

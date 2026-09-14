@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,9 +9,11 @@ from trading_bot.application.backtest_pipeline import (
     attempt_historical_backtest,
     run_historical_backtest,
 )
+from trading_bot.backtest.versions import run_id
 from trading_bot.config.loader import config_version
 from trading_bot.domain.enums import BacktestFailureKind, BacktestStatus, FundingMode, Timeframe
 from trading_bot.domain.errors import DomainValidationError
+from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.market_models import Candle
 from trading_bot.domain.risk_models import InstrumentMetadata
 from trading_bot.domain.value_objects import VersionSet
@@ -182,3 +185,92 @@ def test_historical_funding_mode_fails_closed_without_provider(app_config):
     )
     assert failure.status is BacktestStatus.FAILED
     assert failure.kind is BacktestFailureKind.VALIDATION
+
+
+def test_state_warmup_replays_market_state_but_cannot_execute_warmup_signal(
+    app_config, monkeypatch
+):
+    official_start = datetime(2026, 1, 2, 12, tzinfo=UTC)
+    warmup_start = official_start - timedelta(days=2)
+    end = official_start + timedelta(minutes=30)
+    versions = HistoricalVersionSet("m5-warmup", "m15-warmup", "h1-warmup")
+    warmup_evaluation = SimpleNamespace(
+        decision=SimpleNamespace(as_of=official_start - timedelta(minutes=15))
+    )
+    official_evaluation = SimpleNamespace(decision=SimpleNamespace(as_of=official_start))
+    captured = {}
+
+    def build(_repository, _symbol, _versions, start, stop, _config, _run_versions):
+        captured["snapshot_range"] = (start, stop)
+        return SimpleNamespace(snapshots=(object(),), failures=())
+
+    monkeypatch.setattr(
+        "trading_bot.application.backtest_pipeline.build_historical_snapshot_sequence",
+        build,
+    )
+    monkeypatch.setattr(
+        "trading_bot.application.backtest_pipeline.replay_historical_sequence",
+        lambda *_args: (warmup_evaluation, official_evaluation),
+    )
+
+    class RecordingEngine:
+        def __init__(self, spec, *_args):
+            captured["spec"] = spec
+
+        def run(self, candles, evaluations):
+            captured["candles"] = candles
+            captured["evaluations"] = evaluations
+            return SimpleNamespace(run=SimpleNamespace(spec=captured["spec"]))
+
+    monkeypatch.setattr("trading_bot.application.backtest_pipeline.BacktestEngine", RecordingEngine)
+    metadata = InstrumentMetadata(
+        "BTC-USDT-SWAP",
+        "LINEAR_SWAP_FIXTURE",
+        "USDT",
+        True,
+        D("1"),
+        D("0.01"),
+        D("1"),
+        D("1"),
+        D("10"),
+        D("10000"),
+        D("5"),
+        official_start,
+        "instrument-warmup-v1",
+    )
+
+    result = run_historical_backtest(
+        _Repository({timeframe: () for timeframe in Timeframe}),
+        "BTC-USDT-SWAP",
+        versions,
+        official_start,
+        end,
+        app_config,
+        VersionSet(
+            "code-v1",
+            app_config.strategy.version,
+            config_version(app_config),
+            versions.snapshot_data_version,
+        ),
+        metadata,
+        state_warmup_start_time=warmup_start,
+    )
+
+    assert captured["snapshot_range"] == (warmup_start, end)
+    assert captured["spec"].start_time == official_start
+    assert captured["evaluations"] == (official_evaluation,)
+    spec = result.run.spec
+    base_identifier = run_id(
+        spec.versions,
+        versions,
+        metadata,
+        spec.execution_model_version,
+        spec.cost_model_version,
+        spec.funding_model_version,
+        official_start,
+        end,
+        spec.initial_equity,
+    )
+    assert spec.backtest_run_id == deterministic_id(
+        "state-warmed-backtest-v1", base_identifier, warmup_start
+    )

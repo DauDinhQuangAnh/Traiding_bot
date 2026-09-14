@@ -52,6 +52,10 @@ def test_grouped_metrics_always_show_sample_count():
     assert groups[("side", "SHORT")].trade_count == 1
     assert groups[("regime", "TREND_UP")].insufficient_sample
     assert groups[("setup", "BREAKOUT_RETEST")].trade_count == 1
+    assert groups[("side", "LONG")].insufficient_sample
+    assert groups[("regime", "SIDEWAY")].trade_count == 0
+    assert groups[("regime", "SIDEWAY")].insufficient_sample
+    assert groups[("setup", "SIDEWAY_MEAN_REVERSION")].trade_count == 0
 
 
 def test_zero_trade_metrics_keep_undefined_ratios_unavailable():
@@ -108,3 +112,37 @@ def test_partition_drawdown_and_exposure_use_only_official_window():
 
     assert metrics.maximum_drawdown == D("10")
     assert metrics.exposure == D("0.5")
+
+
+def test_half_open_partition_boundary_has_single_trade_owner():
+    at_start = trade(0, "10", opened=START)
+    at_end = trade(1, "20", opened=START + timedelta(days=1))
+
+    first = project_validation_metrics(
+        backtest_result((at_start, at_end)),
+        evaluation_range(0, 1),
+        minimum_sample_size=1,
+        calculation=CALCULATION,
+    )
+    second = project_validation_metrics(
+        backtest_result((at_start, at_end)),
+        evaluation_range(1, 2),
+        minimum_sample_size=1,
+        calculation=CALCULATION,
+    )
+
+    assert first.trade_count == 1 and first.net_pnl == D("10")
+    assert second.trade_count == 1 and second.net_pnl == D("20")
+
+
+def test_all_breakeven_metrics_are_zero_only_when_mathematically_defined():
+    metrics = project_validation_metrics(
+        backtest_result((trade(0, "0"), trade(1, "0"))),
+        evaluation_range(0, 1),
+        minimum_sample_size=1,
+        calculation=CALCULATION,
+    )
+
+    assert metrics.net_pnl == D("0")
+    assert metrics.expectancy_r == D("0")
+    assert metrics.profit_factor is None

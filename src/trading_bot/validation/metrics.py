@@ -9,6 +9,7 @@ from trading_bot.backtest.metrics import drawdown_summary, performance_summary
 from trading_bot.backtest.models import BacktestResult, BacktestTradeResult
 from trading_bot.config.calculation import calculation_context
 from trading_bot.config.models import CalculationConfig
+from trading_bot.domain.enums import MarketRegime, SetupType, TradeSide
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.primitives import ZERO
 from trading_bot.validation.models import EvaluationRange, GroupMetric, ValidationMetrics
@@ -76,14 +77,18 @@ def project_validation_metrics(
 def _group_metrics(
     trades: tuple[BacktestTradeResult, ...], minimum_sample_size: int
 ) -> tuple[GroupMetric, ...]:
-    dimensions: tuple[tuple[str, Callable[[BacktestTradeResult], str]], ...] = (
-        ("side", lambda trade: trade.side.value),
-        ("regime", lambda trade: trade.entry_regime.value),
-        ("setup", lambda trade: trade.setup_type.value),
+    dimensions: tuple[tuple[str, Callable[[BacktestTradeResult], str], tuple[str, ...]], ...] = (
+        ("side", lambda trade: trade.side.value, tuple(item.value for item in TradeSide)),
+        (
+            "regime",
+            lambda trade: trade.entry_regime.value,
+            tuple(item.value for item in MarketRegime),
+        ),
+        ("setup", lambda trade: trade.setup_type.value, tuple(item.value for item in SetupType)),
     )
     output: list[GroupMetric] = []
-    for dimension, key in dimensions:
-        for value in sorted({key(trade) for trade in trades}):
+    for dimension, key, values in dimensions:
+        for value in values:
             members = tuple(trade for trade in trades if key(trade) == value)
             summary = performance_summary(members)
             output.append(

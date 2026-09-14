@@ -23,7 +23,7 @@ def summarize_walk_forward(
         item.expectancy_r for item in metrics if item.expectancy_r is not None
     )
     profit_factors = tuple(item.profit_factor for item in metrics if item.profit_factor is not None)
-    trades = sum(item.trade_count for item in metrics)
+    expectancy_trades = sum(item.trade_count for item in metrics if item.expectancy_r is not None)
     gross_profit = sum((item.gross_profit for item in metrics), ZERO)
     gross_loss = sum((item.gross_loss for item in metrics), ZERO)
     with calculation_context(calculation):
@@ -36,8 +36,8 @@ def summarize_walk_forward(
                 ),
                 ZERO,
             )
-            / Decimal(trades)
-            if trades
+            / Decimal(expectancy_trades)
+            if expectancy_trades
             else None
         )
         return WalkForwardSummary(

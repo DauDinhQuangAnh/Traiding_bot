@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from trading_bot.domain.errors import PersistenceError
@@ -22,7 +23,7 @@ CREATE TABLE IF NOT EXISTS validation_runs (
 );
 CREATE TABLE IF NOT EXISTS partition_results (
     validation_run_id TEXT NOT NULL,
-    partition_result_id TEXT NOT NULL UNIQUE,
+    partition_result_id TEXT NOT NULL,
     result_json TEXT NOT NULL,
     PRIMARY KEY(validation_run_id, partition_result_id),
     FOREIGN KEY(validation_run_id) REFERENCES validation_runs(validation_run_id)
@@ -74,7 +75,7 @@ class SQLiteValidationRepository:
 
     def append_result(self, result: ValidationRun) -> None:
         result_json = canonical_json(result)
-        protocol_json = canonical_json(result.protocol)
+        protocol_json = canonical_json(replace(result.protocol, test_evaluation_count=0))
         try:
             existing = self._connection.execute(
                 "SELECT result_json FROM validation_runs WHERE validation_run_id = ?",

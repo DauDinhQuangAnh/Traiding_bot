@@ -39,10 +39,11 @@ def bootstrap_trade_results(
     identifier = deterministic_id("trade-bootstrap-v1", protocol_id, spec, r_multiples, net_pnls)
     if len(r_multiples) < spec.minimum_trades:
         return BootstrapResult(
-            identifier, spec.seed, spec.iterations, len(r_multiples), *(None,) * 6
+            identifier, spec.seed, spec.iterations, len(r_multiples), *(None,) * 9
         )
     expectancy_samples: list[Decimal] = []
     pnl_samples: list[Decimal] = []
+    profit_factor_samples: list[Decimal] = []
     size = len(r_multiples)
     with calculation_context(calculation):
         for iteration in range(spec.iterations):
@@ -50,9 +51,15 @@ def bootstrap_trade_results(
             expectancy_samples.append(
                 sum((r_multiples[index] for index in indexes), ZERO) / Decimal(size)
             )
-            pnl_samples.append(sum((net_pnls[index] for index in indexes), ZERO))
+            sampled_pnls = tuple(net_pnls[index] for index in indexes)
+            pnl_samples.append(sum(sampled_pnls, ZERO))
+            gross_profit = sum((value for value in sampled_pnls if value > ZERO), ZERO)
+            gross_loss = abs(sum((value for value in sampled_pnls if value < ZERO), ZERO))
+            if gross_loss > ZERO:
+                profit_factor_samples.append(gross_profit / gross_loss)
     expectancy_samples.sort()
     pnl_samples.sort()
+    profit_factor_samples.sort()
     return BootstrapResult(
         identifier,
         spec.seed,
@@ -64,6 +71,9 @@ def bootstrap_trade_results(
         _percentile(pnl_samples, 50, 100),
         _percentile(pnl_samples, 5, 100),
         _percentile(pnl_samples, 95, 100),
+        _percentile(profit_factor_samples, 50, 100) if profit_factor_samples else None,
+        _percentile(profit_factor_samples, 5, 100) if profit_factor_samples else None,
+        _percentile(profit_factor_samples, 95, 100) if profit_factor_samples else None,
     )
 
 

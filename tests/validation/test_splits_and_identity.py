@@ -20,7 +20,7 @@ from trading_bot.validation.splits import (
 )
 from trading_bot.validation.walk_forward import generate_walk_forward_windows
 
-from .helpers import START, evaluation_range
+from .helpers import HISTORICAL, START, evaluation_range
 
 
 def test_chronological_split_is_deterministic_and_typed():
@@ -137,6 +137,7 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
         strategy_version="strategy",
         config_version="config",
         split_id="split",
+        historical_versions=HISTORICAL,
         execution_model_version="execution",
         cost_model_version="cost",
         funding_model_version="funding",
@@ -146,6 +147,10 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
     changed_strategy = create_validation_protocol(**(kwargs | {"strategy_version": "strategy-2"}))
     changed_cost = create_validation_protocol(**(kwargs | {"cost_model_version": "cost-2"}))
     changed_split = create_validation_protocol(**(kwargs | {"split_id": "split-2"}))
+    changed_history = create_validation_protocol(
+        **(kwargs | {"historical_versions": replace(HISTORICAL, m5_data_version="m5-v2")})
+    )
+    consumed = create_validation_protocol(**(kwargs | {"test_evaluation_count": 1}))
 
     assert (
         len(
@@ -154,7 +159,9 @@ def test_protocol_identity_changes_for_strategy_cost_and_split():
                 changed_strategy.protocol_id,
                 changed_cost.protocol_id,
                 changed_split.protocol_id,
+                changed_history.protocol_id,
             }
         )
-        == 4
+        == 5
     )
+    assert consumed.protocol_id == baseline.protocol_id

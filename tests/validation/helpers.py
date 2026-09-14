@@ -150,11 +150,13 @@ def validation_run():
         strategy_version="strategy-v1",
         config_version="config-v1",
         split_id=split.split_id,
+        historical_versions=HISTORICAL,
         execution_model_version="execution-v1",
         cost_model_version="cost-v1",
         funding_model_version="funding-v1",
         instrument_metadata_version="instrument-v1",
         allowed_sensitivity_dimensions=("strategy.long_threshold",),
+        test_evaluation_count=1,
     )
     results = []
     for partition, evaluation in (

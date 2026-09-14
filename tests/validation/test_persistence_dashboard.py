@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 
+from trading_bot.application.validation_pipeline import assemble_validation_run
 from trading_bot.dashboard.api import ReadOnlyValidationApi
 from trading_bot.dashboard.services import ValidationDashboardService
 from trading_bot.domain.errors import PersistenceError
@@ -10,7 +11,7 @@ from trading_bot.infrastructure.sqlite_validation import SQLiteValidationReposit
 from trading_bot.validation.models import RobustnessStatus
 from trading_bot.validation.reports import validation_json
 
-from .helpers import validation_run
+from .helpers import CALCULATION, validation_run
 
 
 def test_validation_sqlite_is_idempotent_and_canonical(tmp_path):
@@ -35,6 +36,31 @@ def test_validation_sqlite_rejects_conflicting_same_id(tmp_path):
         repository.append_result(result)
         with pytest.raises(PersistenceError, match="conflicts"):
             repository.append_result(conflict)
+    finally:
+        repository.close()
+
+
+def test_validation_sqlite_appends_incremented_test_consumption_without_overwrite(tmp_path):
+    first = validation_run()
+    second = assemble_validation_run(
+        replace(first.protocol, test_evaluation_count=2),
+        first.split,
+        first.historical_versions,
+        first.partitions,
+        CALCULATION,
+        limitations=first.limitations,
+    )
+    repository = SQLiteValidationRepository(tmp_path / "validation.db")
+    try:
+        repository.append_result(first)
+        repository.append_result(second)
+
+        assert first.validation_run_id != second.validation_run_id
+        assert set(repository.list_run_ids()) == {
+            first.validation_run_id,
+            second.validation_run_id,
+        }
+        assert first.protocol.protocol_id == second.protocol.protocol_id
     finally:
         repository.close()
 

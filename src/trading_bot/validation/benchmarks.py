@@ -59,8 +59,11 @@ def buy_and_hold_benchmark(
         entry_cost = initial_equity * entry_cost_rate
         exit_notional = quantity * exit_price
         exit_cost = exit_notional * exit_cost_rate
-        equities = tuple(
-            initial_equity - entry_cost + (price - entry) * quantity for _, price in selected
+        net_pnl = (exit_price - entry) * quantity - entry_cost - exit_cost
+        equities = (
+            initial_equity,
+            *(initial_equity - entry_cost + (price - entry) * quantity for _, price in selected),
+            initial_equity + net_pnl,
         )
         peak = equities[0]
         maximum_drawdown = ZERO
@@ -72,7 +75,6 @@ def buy_and_hold_benchmark(
             if drawdown > maximum_drawdown:
                 maximum_drawdown = drawdown
                 maximum_ratio = ratio
-        net_pnl = (exit_price - entry) * quantity - entry_cost - exit_cost
         return_ratio = net_pnl / initial_equity
     return BenchmarkResult(
         deterministic_id(

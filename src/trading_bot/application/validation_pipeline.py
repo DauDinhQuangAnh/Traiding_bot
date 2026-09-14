@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import cast
 
@@ -90,7 +91,15 @@ def run_baseline_validation(
     funding_provider: FundingRateProvider | None = None,
 ) -> ValidationRun:
     """Run one frozen strategy/config across TRAIN, VALIDATION and final TEST."""
-    _validate_protocol(protocol, split.split_id, config, versions, metadata, funding_provider)
+    _validate_protocol(
+        protocol,
+        split.split_id,
+        historical_versions,
+        config,
+        versions,
+        metadata,
+        funding_provider,
+    )
     windows = partition_windows(split, config, requested_warmup=requested_warmup)
     partitions = tuple(
         _run_partition(
@@ -107,8 +116,12 @@ def run_baseline_validation(
         )
         for window in windows
     )
-    return assemble_validation_run(
+    consumed_protocol = replace(
         protocol,
+        test_evaluation_count=protocol.test_evaluation_count + 1,
+    )
+    return assemble_validation_run(
+        consumed_protocol,
         split,
         historical_versions,
         partitions,
@@ -182,12 +195,13 @@ def _run_partition(
         cast(HistoricalCandleRepository, bounded),
         symbol,
         historical_versions,
-        window.data_start,
+        window.evaluation.start,
         window.evaluation.end,
         config,
         versions,
         metadata,
         funding_provider,
+        state_warmup_start_time=window.data_start,
     )
     _validate_backtest_identity(backtest, protocol)
     metrics = project_validation_metrics(
@@ -216,18 +230,21 @@ def _run_partition(
 def _validate_protocol(
     protocol: ValidationProtocol,
     split_id: str,
+    historical_versions: HistoricalVersionSet,
     config: AppConfig,
     versions: VersionSet,
     metadata: InstrumentMetadata,
     funding_provider: FundingRateProvider | None,
 ) -> None:
-    if not protocol.test_locked or protocol.test_evaluation_count <= 0:
+    if not protocol.test_locked:
         raise DomainValidationError("final TEST evaluation requires an explicit locked protocol")
     provider = funding_provider or provider_from_config(config.backtest)
     expected = {
+        "code": versions.code_version,
         "strategy": config.strategy.version,
         "config": config_version(config),
         "split": split_id,
+        "historical": historical_versions,
         "execution": execution_model_version(
             config.backtest, config.execution, config.risk, config.calculation
         ),
@@ -236,9 +253,11 @@ def _validate_protocol(
         "instrument": metadata.version,
     }
     actual = {
+        "code": protocol.code_version,
         "strategy": protocol.strategy_version,
         "config": protocol.config_version,
         "split": protocol.split_id,
+        "historical": protocol.historical_versions,
         "execution": protocol.execution_model_version,
         "cost": protocol.cost_model_version,
         "funding": protocol.funding_model_version,
@@ -246,6 +265,8 @@ def _validate_protocol(
     }
     if (
         actual != expected
+        or versions.data_version != historical_versions.snapshot_data_version
+        or versions.code_version != protocol.code_version
         or versions.strategy_version != protocol.strategy_version
         or versions.config_version != protocol.config_version
     ):
@@ -255,6 +276,7 @@ def _validate_protocol(
 def _validate_backtest_identity(result: BacktestResult, protocol: ValidationProtocol) -> None:
     spec = result.run.spec
     identities = (
+        spec.versions.code_version == protocol.code_version,
         spec.versions.strategy_version == protocol.strategy_version,
         spec.versions.config_version == protocol.config_version,
         spec.execution_model_version == protocol.execution_model_version,

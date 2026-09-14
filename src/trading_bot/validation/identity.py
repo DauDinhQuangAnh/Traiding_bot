@@ -19,13 +19,14 @@ def create_validation_protocol(
     strategy_version: str,
     config_version: str,
     split_id: str,
+    historical_versions: HistoricalVersionSet,
     execution_model_version: str,
     cost_model_version: str,
     funding_model_version: str,
     instrument_metadata_version: str,
     allowed_sensitivity_dimensions: tuple[str, ...] = (),
     test_locked: bool = True,
-    test_evaluation_count: int = 1,
+    test_evaluation_count: int = 0,
 ) -> ValidationProtocol:
     from trading_bot.validation.models import StateContinuityPolicy
 
@@ -37,6 +38,7 @@ def create_validation_protocol(
         strategy_version,
         config_version,
         split_id,
+        historical_versions,
         execution_model_version,
         cost_model_version,
         funding_model_version,
@@ -52,6 +54,7 @@ def create_validation_protocol(
         strategy_version,
         config_version,
         split_id,
+        historical_versions,
         execution_model_version,
         cost_model_version,
         funding_model_version,

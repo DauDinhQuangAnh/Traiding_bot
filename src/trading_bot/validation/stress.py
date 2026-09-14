@@ -8,7 +8,12 @@ from decimal import Decimal
 
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.identifiers import deterministic_id
-from trading_bot.validation.models import CostStressResult, ValidationMetrics
+from trading_bot.domain.primitives import require_non_empty, require_ratio
+from trading_bot.validation.models import (
+    CostStressResult,
+    ValidationMetrics,
+    ValidationProtocol,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,22 +37,65 @@ class CostStressSpec:
             raise DomainValidationError("cost stress requires at least one stressed dimension")
 
 
+@dataclass(frozen=True, slots=True)
+class CostStressEvaluation:
+    cost_model_version: str
+    strategy_version: str
+    config_version: str
+    execution_model_version: str
+    funding_model_version: str
+    instrument_metadata_version: str
+    price_deviation_tolerance: Decimal
+    metrics: ValidationMetrics
+
+    def __post_init__(self) -> None:
+        for name in (
+            "cost_model_version",
+            "strategy_version",
+            "config_version",
+            "execution_model_version",
+            "funding_model_version",
+            "instrument_metadata_version",
+        ):
+            require_non_empty(getattr(self, name), name)
+        require_ratio(self.price_deviation_tolerance, "price_deviation_tolerance")
+
+
 def evaluate_cost_stress(
-    protocol_id: str,
+    protocol: ValidationProtocol,
     spec: CostStressSpec,
-    evaluator: Callable[[Decimal], tuple[str, ValidationMetrics]],
+    baseline_price_deviation_tolerance: Decimal,
+    evaluator: Callable[[Decimal], CostStressEvaluation],
 ) -> tuple[CostStressResult, ...]:
+    require_ratio(baseline_price_deviation_tolerance, "baseline_price_deviation_tolerance")
     output = []
     for multiplier in spec.multipliers:
-        cost_model_version, metrics = evaluator(multiplier)
+        evaluation = evaluator(multiplier)
+        identities_match = (
+            evaluation.strategy_version == protocol.strategy_version
+            and evaluation.config_version == protocol.config_version
+            and evaluation.execution_model_version == protocol.execution_model_version
+            and evaluation.instrument_metadata_version == protocol.instrument_metadata_version
+            and (
+                spec.stress_funding
+                or evaluation.funding_model_version == protocol.funding_model_version
+            )
+            and evaluation.price_deviation_tolerance == baseline_price_deviation_tolerance
+        )
+        if not identities_match:
+            raise DomainValidationError("cost stress changed frozen non-cost semantics")
         output.append(
             CostStressResult(
                 deterministic_id(
-                    "cost-stress-result-v1", protocol_id, spec, multiplier, cost_model_version
+                    "cost-stress-result-v1",
+                    protocol.protocol_id,
+                    spec,
+                    multiplier,
+                    evaluation.cost_model_version,
                 ),
                 multiplier,
-                cost_model_version,
-                metrics,
+                evaluation.cost_model_version,
+                evaluation.metrics,
             )
         )
     return tuple(output)

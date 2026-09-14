@@ -11,7 +11,12 @@ from trading_bot.config.models import CalculationConfig
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.primitives import require_finite, require_non_empty
-from trading_bot.validation.models import SensitivityResult, ValidationMetrics, ValidationProtocol
+from trading_bot.validation.models import (
+    PartitionType,
+    SensitivityResult,
+    ValidationMetrics,
+    ValidationProtocol,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +24,8 @@ class SensitivitySpec:
     parameter: str
     baseline_value: Decimal
     multipliers: tuple[Decimal, ...]
+    evaluation_partition: PartitionType = PartitionType.VALIDATION
+    maximum_relative_deviation: Decimal = Decimal("0.05")
 
     def __post_init__(self) -> None:
         require_non_empty(self.parameter, "sensitivity parameter")
@@ -29,6 +36,16 @@ class SensitivitySpec:
             raise DomainValidationError("sensitivity must contain baseline exactly once")
         if any(not value.is_finite() or value <= Decimal("0") for value in self.multipliers):
             raise DomainValidationError("sensitivity multipliers must be finite and positive")
+        require_finite(self.maximum_relative_deviation, "maximum_relative_deviation")
+        if self.maximum_relative_deviation < Decimal("0"):
+            raise DomainValidationError("sensitivity maximum deviation must be non-negative")
+        if any(
+            abs(value - Decimal("1")) > self.maximum_relative_deviation
+            for value in self.multipliers
+        ):
+            raise DomainValidationError("sensitivity perturbations must remain local")
+        if self.evaluation_partition is PartitionType.TEST:
+            raise DomainValidationError("final TEST cannot be used for sensitivity")
 
 
 def evaluate_sensitivity(
@@ -59,6 +76,7 @@ def evaluate_sensitivity(
                     value,
                     multiplier,
                     multiplier == Decimal("1"),
+                    spec.evaluation_partition,
                     metrics,
                 )
             )
