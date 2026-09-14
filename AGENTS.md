@@ -1,10 +1,9 @@
 # Repository guidance
 
-- Last approved phase: PHASE 5 deterministic backtest foundation. Final commit
-  `191fd72` passed GitHub Actions run #6 job `python-312` and received explicit external
-  human approval. PHASE 6 is an implementation candidate awaiting human approval and may
-  not be marked `APPROVED` without that explicit review. Its exact final-commit Python
-  3.12 CI evidence is also pending.
+- Last approved phase: PHASE 6 out-of-sample validation foundation. Final commit
+  `b5319eb304eaa5537843943652384b043765e80f` passed GitHub Actions run #11, job
+  `python-312`, and received explicit external human approval. PHASE 7 may be implemented
+  as an approval candidate but may not be marked `APPROVED` without explicit human review.
 - Source of truth: `README.md` and the approved documents under `docs/`, especially
   `technical-specification.md`, `domain-models.md`, `configuration.md`,
   `market-data.md`, `regime-detection.md`, `strategy.md`, `position-sizing.md`, and
@@ -21,7 +20,8 @@
 - Before handoff, run pytest, Ruff lint, Ruff format check, mypy, and compileall using
   the project commands documented in `README.md`.
 - PHASE 5 source of truth: `docs/phase-5-plan.md`, `docs/backtesting.md`, and
-  `docs/phase-5-review.md`. PHASE 6 is under review and must preserve the frozen PHASE 5
-  business semantics. PHASE 6 source of truth: `docs/phase-6-plan.md` and
-  `docs/validation.md`; review evidence is in `docs/phase-6-review.md`. Production
-  datasets and generated backtest/validation artifacts stay outside Git.
+  `docs/phase-5-review.md`. PHASE 6 source of truth: `docs/phase-6-plan.md`,
+  `docs/validation.md`, and `docs/phase-6-review.md`. PHASE 7 must preserve frozen
+  PHASE 5/6 business semantics; its source of truth begins with `docs/phase-7-plan.md`.
+  AI output is observational and must never feed strategy, Risk, portfolio, or execution.
+  Production datasets and generated backtest/validation/AI artifacts stay outside Git.

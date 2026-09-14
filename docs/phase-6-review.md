@@ -2,19 +2,22 @@
 
 ## IMPLEMENTATION STATUS
 
-`APPROVED_CANDIDATE`
+`APPROVED`
 
-The implementation is an `APPROVED_CANDIDATE` based on the completed external-review
-remediation, local quality gates, and exact implementation-commit Python 3.12 CI. Final
-`APPROVED` remains reserved for external human review. This document does not self-declare
-final approval.
+External human review approved PHASE 6 at final commit
+`b5319eb304eaa5537843943652384b043765e80f`. GitHub Actions workflow `Python quality
+gates`, run #11, job `python-312`, completed SUCCESS for that exact SHA. This records an
+external decision; it is not a self-declared approval.
 
-Current pre-policy-closure baseline commit:
+Run evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34827076107
+
+Job evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34827076107/job/103921582603
+
+Pre-policy-closure baseline commit:
 `d96ac3f538f1359e147c050d9443fa2fee52984b` (`docs: close phase 6 external review
 findings`). GitHub Actions workflow `Python quality gates`, run #10, job `python-312`,
-completed SUCCESS for that exact SHA. The policy-identity closure documented below is a
-new local remediation whose exact commit CI remains pending until it is committed and
-pushed.
+completed SUCCESS for that exact SHA. The policy-identity closure documented below is
+included in the approved final commit.
 
 Run evidence: https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34808253865
 
@@ -158,8 +161,8 @@ No unresolved blocking correctness finding remains in the audited local implemen
 | Ruff, mypy, compileall | PASS locally | All project commands pass. |
 | Exact implementation-remediation Python 3.12 CI | PASS | `211c97b`; run #9, job `python-312`, SUCCESS. |
 | Exact final evidence-commit Python 3.12 CI | PASS | `d96ac3f`; run #10, job `python-312`, SUCCESS. |
-| Exact policy-identity remediation Python 3.12 CI | PENDING | The new focused commit requires its own exact-SHA run. |
-| External human review | PENDING | Required before `APPROVED`. |
+| Exact policy-identity remediation Python 3.12 CI | PASS | `b5319eb`; run #11, job `python-312`, SUCCESS. |
+| External human review | APPROVED | Explicit approval received for `b5319eb` after successful run #11. |
 
 ## Limitations and interpretation
 
@@ -170,5 +173,5 @@ not establish cross-market robustness, and historical evidence cannot guarantee 
 results.
 
 A technically approved validation framework does not imply the strategy is profitable.
-No result authorizes PHASE 7, AI benchmarking, OKX connectivity, Demo trading, or Live
-trading.
+The external review authorizes PHASE 7 implementation only. It does not authorize OKX
+connectivity, Demo trading, Live trading, or treating AI output as trading authority.
