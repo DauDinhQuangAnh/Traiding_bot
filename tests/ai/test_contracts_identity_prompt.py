@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from copy import copy
+from dataclasses import fields, replace
 from datetime import timedelta
 from decimal import getcontext, setcontext
 
@@ -11,15 +12,28 @@ from tests.ai.helpers import (
     analysis_request,
     benchmark_cases,
     benchmark_protocol,
+    benchmark_reference,
     changed_request,
     provider_spec,
     response_json,
 )
-from trading_bot.ai.identity import create_invocation
-from trading_bot.ai.models import AIAnalysisResponse, AIProvider, AIResponseStatus
+from trading_bot.ai.identity import create_benchmark_case, create_invocation
+from trading_bot.ai.models import (
+    AIAnalysisResponse,
+    AIMarketEvidence,
+    AIProvider,
+    AIResponseStatus,
+)
 from trading_bot.ai.parser import create_response, parse_response
 from trading_bot.ai.prompts import render_prompt
-from trading_bot.domain.enums import MarketRegime, Timeframe, TradeDecision
+from trading_bot.ai.versions import PARSER_VERSION
+from trading_bot.config.models import CalculationConfig
+from trading_bot.domain.enums import (
+    DecimalRoundingMode,
+    MarketRegime,
+    Timeframe,
+    TradeDecision,
+)
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.historical.models import HistoricalVersionSet
 
@@ -34,11 +48,21 @@ def test_request_identity_changes_with_every_frozen_semantic_version() -> None:
             request, historical_versions=HistoricalVersionSet("m5-v2", "m15-v1", "h1-v1")
         ),
         changed_request(request, instrument_version="instrument-v2"),
-        changed_request(request, prompt_version="prompt-v2"),
-        changed_request(request, projection_version="projection-v2"),
-        changed_request(request, schema_version="schema-v2"),
     )
-    assert len({request.request_id, *(item.request_id for item in variants)}) == 9
+    assert len({request.request_id, *(item.request_id for item in variants)}) == 6
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("prompt_version", "prompt-v999"),
+        ("projection_version", "projection-v999"),
+        ("schema_version", "schema-v999"),
+    ),
+)
+def test_request_factory_rejects_unregistered_contract_versions(field: str, value: str) -> None:
+    with pytest.raises(DomainValidationError, match="registered contract versions"):
+        changed_request(analysis_request(), **{field: value})
 
 
 def test_request_rejects_tampered_identity_and_projection_bounds() -> None:
@@ -121,7 +145,22 @@ def test_protocol_identity_binds_provider_set_and_order() -> None:
     baseline = benchmark_protocol(cases, specs)
     reversed_protocol = benchmark_protocol(cases, tuple(reversed(specs)))
     disabled = benchmark_protocol(cases, (replace(specs[0], enabled=False), *specs[1:]))
-    assert len({baseline.protocol_id, reversed_protocol.protocol_id, disabled.protocol_id}) == 3
+    changed_calculation = benchmark_protocol(
+        cases,
+        specs,
+        calculation=CalculationConfig(50, DecimalRoundingMode.ROUND_HALF_EVEN),
+    )
+    assert (
+        len(
+            {
+                baseline.protocol_id,
+                reversed_protocol.protocol_id,
+                disabled.protocol_id,
+                changed_calculation.protocol_id,
+            }
+        )
+        == 4
+    )
     with pytest.raises(DomainValidationError, match="unique"):
         replace(baseline, provider_specs=(specs[0], specs[0]))
 
@@ -130,11 +169,86 @@ def test_prompt_is_canonical_bounded_and_contains_no_outcomes_or_execution_field
     prompt = render_prompt(analysis_request())
     assert prompt == render_prompt(analysis_request())
     assert "Do not provide hidden reasoning or chain of thought" in prompt
-    assert '"reference_decision":"NO_TRADE"' in prompt
+    for forbidden_reference in (
+        "reference_decision",
+        "reference_regime",
+        "reference_reason_codes",
+        "expected_decision",
+        "strategy_answer",
+        "reference_label",
+        "correct_regime",
+        "baseline_decision",
+    ):
+        assert forbidden_reference not in prompt
     for forbidden in ('"pnl"', '"mfe"', '"mae"', '"exit"', '"winner"'):
         assert forbidden not in prompt.lower()
+    tampered = copy(analysis_request())
+    object.__setattr__(tampered, "prompt_version", "other-prompt")
     with pytest.raises(DomainValidationError, match="unregistered"):
-        render_prompt(analysis_request(prompt_version="other-prompt"))
+        render_prompt(tampered)
+
+
+def test_parser_rejects_unregistered_schema_before_parsing() -> None:
+    request = analysis_request()
+    invocation = create_invocation(request.request_id, provider_spec())
+    tampered = copy(request)
+    object.__setattr__(tampered, "schema_version", "other-schema")
+    with pytest.raises(DomainValidationError, match="unregistered"):
+        parse_response(
+            raw_text=response_json(TradeDecision.LONG, MarketRegime.TREND_UP),
+            request=tampered,
+            invocation=invocation,
+            attempts=1,
+        )
+    with pytest.raises(DomainValidationError, match="unregistered"):
+        create_response(
+            request=tampered,
+            invocation=invocation,
+            status=AIResponseStatus.TIMEOUT,
+            attempts=1,
+            error_code="TIMEOUT",
+        )
+
+
+def test_reference_labels_are_not_model_visible() -> None:
+    request = analysis_request()
+    long_case = create_benchmark_case(
+        request,
+        benchmark_reference(TradeDecision.LONG, MarketRegime.TREND_UP),
+        "same-input",
+    )
+    short_case = create_benchmark_case(
+        request,
+        benchmark_reference(TradeDecision.SHORT, MarketRegime.TREND_DOWN),
+        "same-input",
+    )
+    long_protocol = benchmark_protocol((long_case,))
+    short_protocol = benchmark_protocol((short_case,))
+
+    model_visible_fields = {item.name for item in fields(AIMarketEvidence)}
+    assert "reference_decision" not in model_visible_fields
+    assert "reference_regime" not in model_visible_fields
+    assert "reference_reason_codes" not in model_visible_fields
+    assert long_case.request.request_id == short_case.request.request_id
+    assert render_prompt(long_case.request) == render_prompt(short_case.request)
+    assert long_case.case_id != short_case.case_id
+    assert long_protocol.protocol_id != short_protocol.protocol_id
+    with pytest.raises(DomainValidationError, match="unique model-visible request IDs"):
+        benchmark_protocol((long_case, short_case))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("prompt_version", "prompt-v999"),
+        ("projection_version", "projection-v999"),
+        ("schema_version", "schema-v999"),
+        ("parser_version", "parser-v999"),
+    ),
+)
+def test_protocol_factory_rejects_unregistered_contract_versions(field: str, value: str) -> None:
+    with pytest.raises(DomainValidationError, match="registered contract versions"):
+        benchmark_protocol(**{field: value})
 
 
 @pytest.mark.parametrize(
@@ -220,6 +334,7 @@ def test_failure_response_cannot_masquerade_as_no_trade() -> None:
         error_code="TIMEOUT",
     )
     assert failure.decision is None
+    assert failure.parser_version == PARSER_VERSION
     with pytest.raises(DomainValidationError, match="failed AI response"):
         replace(failure, decision=TradeDecision.NO_TRADE)
     with pytest.raises(DomainValidationError, match="response_id"):

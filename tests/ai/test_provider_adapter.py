@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import copy
 from datetime import timedelta
 
 import pytest
@@ -8,6 +9,7 @@ from tests.ai.helpers import analysis_request, provider_spec, response_json
 from trading_bot.ai.identity import create_invocation
 from trading_bot.ai.models import AIResponseStatus
 from trading_bot.domain.enums import MarketRegime, TradeDecision
+from trading_bot.domain.errors import DomainValidationError
 from trading_bot.infrastructure.ai_fakes import DeterministicFakeAIAnalyst, ScriptedAITransport
 from trading_bot.infrastructure.ai_provider import (
     AITransportAuthError,
@@ -113,3 +115,16 @@ def test_adapter_rejects_invocation_request_mismatch() -> None:
     adapter = BoundedAIProviderAdapter(ScriptedAITransport([AITransportTimeout()]))
     with pytest.raises(Exception, match="mismatch"):
         adapter.analyze(request, invocation)
+
+
+def test_unknown_schema_fails_before_provider_transport() -> None:
+    request = analysis_request()
+    tampered = copy(request)
+    object.__setattr__(tampered, "schema_version", "unknown-schema")
+    invocation = create_invocation(request.request_id, provider_spec())
+    transport = ScriptedAITransport(
+        [AITransportResult(response_json(TradeDecision.LONG, MarketRegime.TREND_UP))]
+    )
+    with pytest.raises(DomainValidationError, match="unregistered contract version"):
+        BoundedAIProviderAdapter(transport).analyze(tampered, invocation)
+    assert transport.call_count == 0

@@ -17,6 +17,7 @@ from trading_bot.ai.models import (
 )
 from trading_bot.ai.parser import create_response, parse_response
 from trading_bot.ai.prompts import render_prompt
+from trading_bot.ai.versions import PROJECTION_VERSION, PROMPT_VERSION, SCHEMA_VERSION
 from trading_bot.domain.errors import DomainValidationError
 
 
@@ -68,6 +69,12 @@ class BoundedAIProviderAdapter:
         spec = invocation.provider_spec
         if invocation.request_id != request.request_id:
             raise DomainValidationError("AI invocation/request mismatch")
+        if (
+            request.prompt_version != PROMPT_VERSION
+            or request.projection_version != PROJECTION_VERSION
+            or request.schema_version != SCHEMA_VERSION
+        ):
+            raise DomainValidationError("AI request uses an unregistered contract version")
         if not spec.enabled:
             return create_response(
                 request=request,

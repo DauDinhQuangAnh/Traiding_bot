@@ -4,11 +4,18 @@
 
 `APPROVED_CANDIDATE`
 
-PHASE 7 is implemented and all local gates pass. Implementation commit
-`3467a0ff0d833dd82440b5c46516794f8050b5e0` passed
-[GitHub Actions run #12, job `python-312`](https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34832334931/job/103938295697).
-It is therefore an `APPROVED_CANDIDATE`; only a later explicit external human review may
-mark it `APPROVED`.
+Final external review found three correctness gaps. They are resolved locally; candidate
+status is contingent on the exact final remediation commit passing Python 3.12 CI before
+handoff. Only a later explicit external human review may mark it `APPROVED`.
+
+## Final external review remediation
+
+- A. reference-label leakage — `RESOLVED LOCALLY`: model-visible evidence and
+  benchmark-only reference are separate; request/prompt identity excludes labels.
+- B. Decimal aggregation determinism — `RESOLVED LOCALLY`: protocol identity binds
+  `CalculationConfig`; ratios and confidence averages use scoped `calculation_context`.
+- C. response provenance — `RESOLVED LOCALLY`: response identity binds parser version;
+  prompt/projection/schema/parser versions are registered and replay-verified.
 
 ## STRATEGY ROBUSTNESS STATUS
 
@@ -39,6 +46,9 @@ provider winner, or profitability claim has been manufactured.
 | Provider-independent port | PASS locally | `AIAnalystPort`; no vendor SDK dependency. |
 | OpenAI/Anthropic/Gemini specs | PASS locally | Typed ordered specs; disabled example configuration. |
 | Prompt/schema/projection identity | PASS locally | Separate versions bind request/protocol IDs; prompt golden regression. |
+| Reference-label isolation | PASS locally | Same evidence with LONG/SHORT references has identical request/prompt and different case/protocol IDs; duplicate request IDs in one protocol fail closed. |
+| Decimal context determinism | PASS locally | `1/3` agreement and `1.1/3` confidence average produce identical metrics/canonical JSON/IDs under hostile ambient contexts. |
+| Response provenance | PASS locally | Prompt/projection/schema/parser tampering and unknown registered versions fail before provider execution or metric replay. |
 | Strict parser | PASS locally | Exact fields, lossless Decimal, enum/list bounds, typed parse/schema failure. |
 | Bounded provider failure policy | PASS locally | Timeout/rate-limit/auth/provider mapping, retry caps, capped no-sleep backoff. |
 | Multi-provider partial failure | PASS locally | Successful providers retained while a failed provider contributes typed rows/counts. |
@@ -49,11 +59,11 @@ provider winner, or profitability claim has been manufactured.
 | Trading independence | PASS locally | Source audit rejects risk/execution/order imports and calls in PHASE 7 code. |
 | Secret safety | PASS locally | Provider key names redact/exclude; no values/config fields/network payloads. |
 | No provider winner/optimization | PASS locally | Metrics contain no rank/selection/PnL feedback path. |
-| Existing PHASE 1–6 regression | PASS locally | 360 tests pass; no prior test disabled. |
+| Existing PHASE 1–6 regression | PASS locally | 377 tests pass; no prior test disabled. |
 | Overall branch coverage >=85% | PASS locally | Full branch-aware suite reports 87%. |
-| Critical PHASE 7 branch coverage >=90% | PASS locally | Focused aggregate 97%; models 97%, parser/provider 100%, evidence 91%, benchmark 99%, SQLite 90%. |
+| Critical PHASE 7 branch coverage >=90% | PASS locally | Focused aggregate 97%; models 97%, evidence 92%, identity/prompts/parser/provider 100%, benchmark 98%, SQLite 90%. |
 | Ruff lint/format, mypy, compileall | PASS locally | All documented project commands pass. |
-| Exact implementation-commit Python 3.12 CI | PASS | Commit `3467a0ff0d833dd82440b5c46516794f8050b5e0`; [run #12 job `python-312`](https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34832334931/job/103938295697) SUCCESS. |
+| Exact final remediation-commit Python 3.12 CI | REQUIRED BEFORE HANDOFF | Exact SHA/run/job result is recorded in the final agent report after push. |
 | External human review | PENDING | Mandatory before `APPROVED`. |
 
 ## Limitations

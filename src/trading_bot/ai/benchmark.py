@@ -21,13 +21,20 @@ from trading_bot.ai.models import (
     AIProviderMetrics,
     AIReferenceDecisionMetrics,
     AIResponseStatus,
-    confidence_average,
-    ratio,
 )
 from trading_bot.ai.ports import AIAnalystPort
+from trading_bot.ai.versions import (
+    PARSER_VERSION,
+    PROJECTION_VERSION,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+)
+from trading_bot.config.calculation import calculation_context
+from trading_bot.config.models import CalculationConfig
 from trading_bot.domain.enums import MarketRegime, TradeDecision
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.identifiers import deterministic_id
+from trading_bot.domain.primitives import ZERO
 
 ProviderKey = tuple[AIProvider, str]
 
@@ -77,12 +84,12 @@ def assemble_benchmark_run(
     _validate_invocation_responses(protocol, cases, invocations, responses)
     request_references = {
         case.request.request_id: (
-            case.request.evidence.reference_decision,
-            case.request.evidence.reference_regime,
+            case.reference.reference_decision,
+            case.reference.reference_regime,
         )
         for case in cases
     }
-    metrics = calculate_metrics(protocol, request_references, responses)
+    metrics = calculate_metrics(protocol, request_references, responses, protocol.calculation)
     status = (
         AIBenchmarkRunStatus.COMPLETED
         if all(item.status is AIResponseStatus.SUCCESS for item in responses)
@@ -93,6 +100,18 @@ def assemble_benchmark_run(
 
 
 def calculate_metrics(
+    protocol: AIBenchmarkProtocol,
+    references: Mapping[str, tuple[TradeDecision, MarketRegime]],
+    responses: tuple[AIAnalysisResponse, ...],
+    calculation: CalculationConfig,
+) -> AIBenchmarkMetrics:
+    if calculation != protocol.calculation:
+        raise DomainValidationError("benchmark calculation policy does not match protocol")
+    with calculation_context(calculation):
+        return _calculate_metrics(protocol, references, responses)
+
+
+def _calculate_metrics(
     protocol: AIBenchmarkProtocol,
     references: Mapping[str, tuple[TradeDecision, MarketRegime]],
     responses: tuple[AIAnalysisResponse, ...],
@@ -165,17 +184,17 @@ def _provider_metrics(
         case_count=case_count,
         success_count=len(success),
         failure_count=failures,
-        valid_response_rate=ratio(len(success), case_count),
+        valid_response_rate=_ratio(len(success), case_count),
         decision_agreement_count=decision_agreement,
-        decision_agreement_rate=ratio(decision_agreement, len(success)),
+        decision_agreement_rate=_ratio(decision_agreement, len(success)),
         regime_agreement_count=regime_agreement,
-        regime_agreement_rate=ratio(regime_agreement, len(success)),
+        regime_agreement_rate=_ratio(regime_agreement, len(success)),
         long_count=decisions[TradeDecision.LONG],
         short_count=decisions[TradeDecision.SHORT],
         no_trade_count=decisions[TradeDecision.NO_TRADE],
-        long_rate=ratio(decisions[TradeDecision.LONG], len(success)),
-        short_rate=ratio(decisions[TradeDecision.SHORT], len(success)),
-        no_trade_rate=ratio(decisions[TradeDecision.NO_TRADE], len(success)),
+        long_rate=_ratio(decisions[TradeDecision.LONG], len(success)),
+        short_rate=_ratio(decisions[TradeDecision.SHORT], len(success)),
+        no_trade_rate=_ratio(decisions[TradeDecision.NO_TRADE], len(success)),
         reference_decision_metrics=reference_metrics,
         timeout_count=status_count[AIResponseStatus.TIMEOUT],
         rate_limit_count=status_count[AIResponseStatus.RATE_LIMIT],
@@ -184,7 +203,7 @@ def _provider_metrics(
         invalid_response_count=status_count[AIResponseStatus.INVALID_RESPONSE],
         schema_failure_count=status_count[AIResponseStatus.SCHEMA_VALIDATION_FAILED],
         confidence_count=len(confidences),
-        average_confidence=confidence_average(confidences),
+        average_confidence=_confidence_average(confidences),
         minimum_confidence=min(confidences) if confidences else None,
         maximum_confidence=max(confidences) if confidences else None,
         confidence_buckets=_confidence_buckets(confidences),
@@ -201,7 +220,7 @@ def _reference_metrics(
     comparable = tuple(item for item in successes if references[item.request_id][0] is decision)
     agreement = sum(item.decision is decision for item in comparable)
     return AIReferenceDecisionMetrics(
-        decision, len(comparable), agreement, ratio(agreement, len(comparable))
+        decision, len(comparable), agreement, _ratio(agreement, len(comparable))
     )
 
 
@@ -237,10 +256,10 @@ def _pairwise_metrics(
         len(common),
         decision_agreement,
         len(common) - decision_agreement,
-        ratio(decision_agreement, len(common)),
+        _ratio(decision_agreement, len(common)),
         regime_agreement,
         len(common) - regime_agreement,
-        ratio(regime_agreement, len(common)),
+        _ratio(regime_agreement, len(common)),
     )
 
 
@@ -264,9 +283,30 @@ def _optional_token_sum(
     return sum(value for value in values if value is not None)
 
 
+def _ratio(numerator: int, denominator: int) -> Decimal | None:
+    if denominator == 0:
+        return None
+    return Decimal(numerator) / Decimal(denominator)
+
+
+def _confidence_average(values: tuple[Decimal, ...]) -> Decimal | None:
+    if not values:
+        return None
+    return sum(values, ZERO) / Decimal(len(values))
+
+
 def _validate_cases(protocol: AIBenchmarkProtocol, cases: tuple[AIBenchmarkCase, ...]) -> None:
+    if (
+        protocol.prompt_version != PROMPT_VERSION
+        or protocol.projection_version != PROJECTION_VERSION
+        or protocol.schema_version != SCHEMA_VERSION
+        or protocol.parser_version != PARSER_VERSION
+    ):
+        raise DomainValidationError("benchmark protocol uses an unregistered contract version")
     if tuple(item.case_id for item in cases) != protocol.case_ids:
         raise DomainValidationError("benchmark cases do not match protocol")
+    if tuple(item.request.request_id for item in cases) != protocol.request_ids:
+        raise DomainValidationError("benchmark request IDs do not match protocol")
     for case in cases:
         request = case.request
         identities = (
@@ -296,12 +336,21 @@ def _validate_invocation_responses(
         raise DomainValidationError("benchmark invocations do not match cases/providers")
     if len({item.invocation_id for item in invocations}) != len(invocations):
         raise DomainValidationError("benchmark invocation IDs must be unique")
+    requests = {case.request.request_id: case.request for case in cases}
     for invocation, response in zip(invocations, responses, strict=True):
+        request = requests[invocation.request_id]
         if (
             response.invocation_id != invocation.invocation_id
             or response.request_id != invocation.request_id
             or response.provider is not invocation.provider_spec.provider
             or response.model != invocation.provider_spec.model
             or response.attempts > invocation.provider_spec.max_attempts
+            or response.prompt_version != request.prompt_version
+            or response.projection_version != request.projection_version
+            or response.schema_version != request.schema_version
+            or response.prompt_version != protocol.prompt_version
+            or response.projection_version != protocol.projection_version
+            or response.schema_version != protocol.schema_version
+            or response.parser_version != protocol.parser_version
         ):
             raise DomainValidationError("benchmark response changed invocation semantics")

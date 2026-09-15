@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import copy
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, localcontext
 
 import pytest
 
@@ -10,10 +10,12 @@ from tests.ai.helpers import (
     analysis_request,
     benchmark_cases,
     benchmark_protocol,
+    benchmark_reference,
+    changed_request,
     provider_spec,
     response_json,
 )
-from trading_bot.ai.benchmark import assemble_benchmark_run, execute_benchmark
+from trading_bot.ai.benchmark import assemble_benchmark_run, calculate_metrics, execute_benchmark
 from trading_bot.ai.identity import create_benchmark_case
 from trading_bot.ai.models import (
     AIAnalysisRequest,
@@ -24,8 +26,10 @@ from trading_bot.ai.models import (
     AIResponseStatus,
 )
 from trading_bot.ai.parser import create_response, parse_response
-from trading_bot.domain.enums import MarketRegime, TradeDecision
+from trading_bot.config.models import CalculationConfig
+from trading_bot.domain.enums import DecimalRoundingMode, MarketRegime, TradeDecision
 from trading_bot.domain.errors import DomainValidationError
+from trading_bot.domain.primitives import canonical_json
 
 
 class MappingAnalyst:
@@ -61,13 +65,32 @@ class FailureAnalyst:
         )
 
 
+class ConfidenceAnalyst:
+    def __init__(
+        self,
+        values: Mapping[str, tuple[TradeDecision, MarketRegime, str]],
+    ) -> None:
+        self.values = values
+
+    def analyze(
+        self, request: AIAnalysisRequest, invocation: AIProviderInvocation
+    ) -> AIAnalysisResponse:
+        decision, regime, confidence = self.values[request.request_id]
+        return parse_response(
+            raw_text=response_json(decision, regime, confidence),
+            request=request,
+            invocation=invocation,
+            attempts=1,
+        )
+
+
 def build_run():
     cases = benchmark_cases()
     protocol = benchmark_protocol(cases)
     reference = {
         case.request.request_id: (
-            case.request.evidence.reference_decision,
-            case.request.evidence.reference_regime,
+            case.reference.reference_decision,
+            case.reference.reference_regime,
         )
         for case in cases
     }
@@ -144,8 +167,8 @@ def test_all_success_run_is_completed() -> None:
     protocol = benchmark_protocol(cases)
     values = {
         case.request.request_id: (
-            case.request.evidence.reference_decision,
-            case.request.evidence.reference_regime,
+            case.reference.reference_decision,
+            case.reference.reference_regime,
         )
         for case in cases
     }
@@ -231,10 +254,124 @@ def test_replay_rejects_response_that_changes_invocation_semantics(
 
 def test_case_that_changes_frozen_protocol_semantics_is_rejected() -> None:
     changed_case = create_benchmark_case(
-        analysis_request(prompt_version="ai-advisory-prompt-v999"),
+        changed_request(analysis_request(), config_version="config-v2"),
+        benchmark_reference(),
         "changed-prompt",
     )
     cases = (changed_case,)
     protocol = benchmark_protocol(cases)
     with pytest.raises(DomainValidationError, match="changed frozen protocol semantics"):
         execute_benchmark(protocol=protocol, cases=cases, analysts={})
+
+
+def test_benchmark_metrics_ignore_ambient_decimal_context() -> None:
+    cases = benchmark_cases()
+    protocol = benchmark_protocol(cases, (provider_spec(AIProvider.OPENAI),))
+    confidence_values = ("0.1", "0.2", "0.8")
+    outputs = {
+        case.request.request_id: (
+            TradeDecision.LONG,
+            case.reference.reference_regime,
+            confidence,
+        )
+        for case, confidence in zip(cases, confidence_values, strict=True)
+    }
+
+    def execute():
+        return execute_benchmark(
+            protocol=protocol,
+            cases=cases,
+            analysts={
+                (AIProvider.OPENAI, "openai-test-model"): ConfidenceAnalyst(outputs),
+            },
+        )
+
+    with localcontext() as ambient:
+        ambient.prec = 6
+        ambient.rounding = ROUND_DOWN
+        low_precision = execute()
+        assert (ambient.prec, ambient.rounding) == (6, ROUND_DOWN)
+    with localcontext() as ambient:
+        ambient.prec = 50
+        ambient.rounding = ROUND_UP
+        high_precision = execute()
+        assert (ambient.prec, ambient.rounding) == (50, ROUND_UP)
+
+    metrics = low_precision.metrics.provider_metrics[0]
+    assert metrics.decision_agreement_count == 1
+    assert metrics.decision_agreement_rate == Decimal("0.3333333333333333333333333333")
+    assert metrics.average_confidence == Decimal("0.3666666666666666666666666667")
+    assert low_precision.metrics == high_precision.metrics
+    assert low_precision.metrics.metrics_id == high_precision.metrics.metrics_id
+    assert low_precision.run_id == high_precision.run_id
+    assert canonical_json(low_precision) == canonical_json(high_precision)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("prompt_version", "projection_version", "schema_version", "parser_version"),
+)
+def test_replay_rejects_tampered_response_provenance(field: str) -> None:
+    run, _, _ = build_run()
+    tampered = copy(run.responses[0])
+    object.__setattr__(tampered, field, "other-version")
+    with pytest.raises(DomainValidationError, match="changed invocation semantics"):
+        assemble_benchmark_run(
+            protocol=run.protocol,
+            cases=run.cases,
+            invocations=run.invocations,
+            responses=(tampered, *run.responses[1:]),
+        )
+
+
+def test_agreement_metrics_read_benchmark_only_case_reference() -> None:
+    request = analysis_request()
+    long_case = create_benchmark_case(
+        request,
+        benchmark_reference(TradeDecision.LONG, MarketRegime.TREND_UP),
+        "long-reference",
+    )
+    short_case = create_benchmark_case(
+        request,
+        benchmark_reference(TradeDecision.SHORT, MarketRegime.TREND_DOWN),
+        "short-reference",
+    )
+    spec = provider_spec(AIProvider.OPENAI)
+    outputs = {request.request_id: (TradeDecision.LONG, MarketRegime.TREND_UP)}
+    long_run = execute_benchmark(
+        protocol=benchmark_protocol((long_case,), (spec,)),
+        cases=(long_case,),
+        analysts={(AIProvider.OPENAI, spec.model): MappingAnalyst(outputs)},
+    )
+    short_run = execute_benchmark(
+        protocol=benchmark_protocol((short_case,), (spec,)),
+        cases=(short_case,),
+        analysts={(AIProvider.OPENAI, spec.model): MappingAnalyst(outputs)},
+    )
+    assert long_run.metrics.provider_metrics[0].decision_agreement_count == 1
+    assert short_run.metrics.provider_metrics[0].decision_agreement_count == 0
+
+
+def test_metric_calculation_and_protocol_versions_cannot_drift() -> None:
+    run, openai, _ = build_run()
+    references = {
+        case.request.request_id: (
+            case.reference.reference_decision,
+            case.reference.reference_regime,
+        )
+        for case in run.cases
+    }
+    with pytest.raises(DomainValidationError, match="calculation policy"):
+        calculate_metrics(
+            run.protocol,
+            references,
+            run.responses,
+            CalculationConfig(50, DecimalRoundingMode.ROUND_HALF_EVEN),
+        )
+
+    tampered = copy(run.protocol)
+    object.__setattr__(tampered, "parser_version", "unknown-parser")
+    before = openai.calls
+    with pytest.raises(DomainValidationError, match="unregistered contract version"):
+        execute_benchmark(protocol=tampered, cases=run.cases, analysts={})
+    assert openai.calls == before

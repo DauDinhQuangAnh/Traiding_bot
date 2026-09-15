@@ -11,11 +11,13 @@ from tests.ai.helpers import (
     AS_OF,
     analysis_request,
     benchmark_protocol,
+    benchmark_reference,
+    changed_request,
     provider_spec,
     response_json,
 )
 from tests.ai.test_benchmark import build_run
-from trading_bot.ai.identity import create_invocation
+from trading_bot.ai.identity import create_benchmark_case, create_invocation
 from trading_bot.ai.models import (
     AIObservation,
     AIProjectionLimits,
@@ -55,7 +57,7 @@ def test_candle_and_observation_validation_boundaries() -> None:
     assert AIObservation("SIGNAL", "label", "safe", AS_OF, "source").value == "safe"
 
 
-def test_evidence_empty_order_duplicate_observation_and_no_trade_reason_guards() -> None:
+def test_evidence_empty_order_duplicate_observation_and_reference_reason_guards() -> None:
     request = analysis_request()
     with pytest.raises(DomainValidationError, match="requires candles"):
         replace(request.evidence, candles=())
@@ -72,7 +74,7 @@ def test_evidence_empty_order_duplicate_observation_and_no_trade_reason_guards()
             observations=(request.evidence.observations[0], request.evidence.observations[0]),
         )
     with pytest.raises(DomainValidationError, match="requires reason"):
-        replace(request.evidence, reference_reason_codes=())
+        replace(benchmark_reference(), reference_reason_codes=())
 
 
 def test_request_observation_reason_and_text_bounds() -> None:
@@ -88,13 +90,13 @@ def test_request_observation_reason_and_text_bounds() -> None:
             limits=replace(request.limits, max_observations=2),
         )
     with pytest.raises(DomainValidationError, match="reason projection"):
-        replace(
-            request,
-            evidence=replace(
-                request.evidence,
+        create_benchmark_case(
+            changed_request(request, limits=replace(request.limits, max_reason_codes=1)),
+            replace(
+                benchmark_reference(),
                 reference_reason_codes=(ReasonCode.NO_SIGNAL, ReasonCode.SCORE_TOO_LOW),
             ),
-            limits=replace(request.limits, max_reason_codes=1),
+            "too-many-reasons",
         )
     text = AIObservation("SIGNAL", "label", "x" * 17, AS_OF, "source-text")
     with pytest.raises(DomainValidationError, match="text observation"):
@@ -152,6 +154,10 @@ def test_response_success_and_failure_shape_guards() -> None:
         (success, {"input_tokens": -1}),
         (success, {"provider_response_id": ""}),
         (success, {"provider_response_id": "x" * 241}),
+        (success, {"prompt_version": "other-prompt"}),
+        (success, {"projection_version": "other-projection"}),
+        (success, {"schema_version": "other-schema"}),
+        (success, {"parser_version": "other-parser"}),
         (success, {"risk_flags": tuple("x" for _ in range(11))}),
         (success, {"reasons": ("",)}),
         (success, {"risk_flags": ("x" * 81,)}),
@@ -170,6 +176,8 @@ def test_protocol_case_and_provider_requirements_are_strict() -> None:
     protocol = benchmark_protocol()
     with pytest.raises(DomainValidationError, match="case IDs"):
         replace(protocol, case_ids=())
+    with pytest.raises(DomainValidationError, match="request IDs"):
+        replace(protocol, request_ids=(protocol.request_ids[0],) * len(protocol.request_ids))
     with pytest.raises(DomainValidationError, match="provider specs"):
         replace(protocol, provider_specs=())
     with pytest.raises(DomainValidationError, match="case_set_id"):

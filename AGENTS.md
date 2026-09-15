@@ -23,9 +23,8 @@
   `docs/phase-5-review.md`. PHASE 6 source of truth: `docs/phase-6-plan.md`,
   `docs/validation.md`, and `docs/phase-6-review.md`. PHASE 7 must preserve frozen
   PHASE 5/6 business semantics; its source of truth is `docs/phase-7-plan.md`,
-  `docs/ai-benchmark.md`, and `docs/phase-7-review.md`. PHASE 7 implementation commit
-  `3467a0ff0d833dd82440b5c46516794f8050b5e0` passed GitHub Actions run #12 job
-  `python-312` and is `APPROVED_CANDIDATE`, not `APPROVED`, pending explicit external
-  human review. AI output is observational and must never feed strategy, Risk,
-  portfolio, or execution. Production datasets and generated backtest/validation/AI
-  artifacts stay outside Git.
+  `docs/ai-benchmark.md`, and `docs/phase-7-review.md`. PHASE 7 is an
+  `APPROVED_CANDIDATE`, not `APPROVED`, after reference-label, Decimal-context, and
+  response-provenance remediation; explicit external human review remains mandatory.
+  AI output is observational and must never feed strategy, Risk, portfolio, or execution.
+  Production datasets and generated backtest/validation/AI artifacts stay outside Git.

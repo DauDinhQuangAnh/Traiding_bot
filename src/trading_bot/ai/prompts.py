@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from trading_bot.ai.models import AIAnalysisRequest
+from trading_bot.ai.versions import PROJECTION_VERSION, PROMPT_VERSION, SCHEMA_VERSION
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.primitives import canonical_json
 
-PROMPT_VERSION = "ai-advisory-prompt-v1"
-SCHEMA_VERSION = "ai-analysis-response-v1"
-
 
 def render_prompt(request: AIAnalysisRequest) -> str:
-    if request.prompt_version != PROMPT_VERSION:
-        raise DomainValidationError("unregistered AI prompt version")
+    if (
+        request.prompt_version != PROMPT_VERSION
+        or request.projection_version != PROJECTION_VERSION
+        or request.schema_version != SCHEMA_VERSION
+    ):
+        raise DomainValidationError("unregistered AI prompt contract version")
     evidence_json = canonical_json(request.evidence)
     return (
         "You are a read-only market-analysis benchmark. Use only the point-in-time evidence "

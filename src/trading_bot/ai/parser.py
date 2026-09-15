@@ -13,12 +13,14 @@ from trading_bot.ai.models import (
     AIProviderInvocation,
     AIResponseStatus,
 )
+from trading_bot.ai.versions import PARSER_VERSION, SCHEMA_VERSION
 from trading_bot.domain.enums import MarketRegime, TradeDecision
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.primitives import require_ratio
 
 _FIELDS = {"decision", "regime", "confidence", "reasons", "risk_flags"}
+SUPPORTED_SCHEMA_VERSION = SCHEMA_VERSION
 
 
 def create_response(
@@ -37,6 +39,8 @@ def create_response(
     output_tokens: int | None = None,
     error_code: str | None = None,
 ) -> AIAnalysisResponse:
+    if request.schema_version != SUPPORTED_SCHEMA_VERSION:
+        raise DomainValidationError("unregistered AI response schema version")
     values = (
         invocation.invocation_id,
         request.request_id,
@@ -52,6 +56,7 @@ def create_response(
         request.prompt_version,
         request.projection_version,
         request.schema_version,
+        PARSER_VERSION,
         attempts,
         input_tokens,
         output_tokens,
@@ -73,6 +78,8 @@ def parse_response(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
 ) -> AIAnalysisResponse:
+    if request.schema_version != SUPPORTED_SCHEMA_VERSION:
+        raise DomainValidationError("unregistered AI response schema version")
     try:
         value = json.loads(raw_text)
     except (json.JSONDecodeError, TypeError):

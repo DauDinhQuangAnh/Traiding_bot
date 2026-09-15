@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from trading_bot.ai.models import AICandleEvidence, AIMarketEvidence, AIObservation
+from trading_bot.ai.models import (
+    AIBenchmarkReference,
+    AICandleEvidence,
+    AIMarketEvidence,
+    AIObservation,
+)
+from trading_bot.ai.versions import PROJECTION_VERSION
 from trading_bot.domain.decision_models import DecisionRecord, SignalAssessment
 from trading_bot.domain.enums import Timeframe
 from trading_bot.domain.errors import DomainValidationError
@@ -13,6 +19,8 @@ from trading_bot.domain.market_models import (
     RegimeAssessment,
 )
 
+__all__ = ["PROJECTION_VERSION", "project_benchmark_reference", "project_market_evidence"]
+
 
 def project_market_evidence(
     *,
@@ -21,15 +29,13 @@ def project_market_evidence(
     regime: RegimeAssessment,
     levels: LevelSet,
     signals: SignalAssessment,
-    decision: DecisionRecord,
     candles_per_timeframe: int,
 ) -> AIMarketEvidence:
     """Build a bounded projection without outcome or post-as-of fields."""
     identities = (
-        market.symbol == indicators.symbol == regime.symbol == levels.symbol == decision.symbol,
+        market.symbol == indicators.symbol == regime.symbol == levels.symbol,
         market.as_of == indicators.as_of == regime.as_of == levels.as_of == signals.as_of,
-        market.as_of == decision.as_of,
-        decision.evaluation_id == market.evaluation_id == signals.evaluation_id,
+        market.evaluation_id == signals.evaluation_id,
     )
     if not all(identities):
         raise DomainValidationError("AI evidence source identities do not match")
@@ -70,7 +76,7 @@ def project_market_evidence(
         (
             AIObservation(
                 "REGIME",
-                "reference_regime_confidence",
+                "detected_regime_confidence",
                 regime.confidence,
                 regime.as_of,
                 regime.assessment_id,
@@ -114,6 +120,12 @@ def project_market_evidence(
         market.as_of,
         candles,
         tuple(observations),
+    )
+
+
+def project_benchmark_reference(decision: DecisionRecord) -> AIBenchmarkReference:
+    """Project benchmark-only labels that must never enter provider input."""
+    return AIBenchmarkReference(
         decision.decision,
         decision.regime,
         decision.reason_codes,

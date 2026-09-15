@@ -13,6 +13,7 @@ from trading_bot.ai.models import (
     AIAnalysisRequest,
     AIBenchmarkCase,
     AIBenchmarkProtocol,
+    AIBenchmarkReference,
     AICandleEvidence,
     AIMarketEvidence,
     AIObservation,
@@ -20,13 +21,26 @@ from trading_bot.ai.models import (
     AIProvider,
     AIProviderSpec,
 )
-from trading_bot.ai.prompts import PROMPT_VERSION, SCHEMA_VERSION
-from trading_bot.domain.enums import MarketRegime, ReasonCode, Timeframe, TradeDecision
+from trading_bot.ai.versions import (
+    PARSER_VERSION,
+    PROJECTION_VERSION,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+)
+from trading_bot.config.models import CalculationConfig
+from trading_bot.domain.enums import (
+    DecimalRoundingMode,
+    MarketRegime,
+    ReasonCode,
+    Timeframe,
+    TradeDecision,
+)
 from trading_bot.historical.models import HistoricalVersionSet
 
 AS_OF = datetime(2024, 1, 1, 12, tzinfo=UTC)
 HISTORICAL = HistoricalVersionSet("m5-v1", "m15-v1", "h1-v1")
 LIMITS = AIProjectionLimits(20, 100, 20, 240)
+CALCULATION = CalculationConfig(28, DecimalRoundingMode.ROUND_HALF_EVEN)
 
 
 def provider_spec(
@@ -52,14 +66,12 @@ def provider_spec(
 
 
 def analysis_request(
-    decision: TradeDecision = TradeDecision.NO_TRADE,
-    regime: MarketRegime = MarketRegime.SIDEWAY,
     *,
-    prompt_version: str = PROMPT_VERSION,
+    variant: str = "default",
 ) -> AIAnalysisRequest:
     candles = tuple(
         AICandleEvidence(
-            f"{timeframe.value}-candle",
+            f"{variant}-{timeframe.value}-candle",
             timeframe,
             AS_OF,
             Decimal("100"),
@@ -75,13 +87,9 @@ def analysis_request(
         AS_OF,
         candles,
         (
-            AIObservation("INDICATOR", "15m.rsi", Decimal("55"), AS_OF, "indicator-1"),
-            AIObservation("SIGNAL", "long_score", Decimal("42"), AS_OF, "signal-1"),
+            AIObservation("INDICATOR", "15m.rsi", Decimal("55"), AS_OF, f"{variant}-indicator"),
+            AIObservation("SIGNAL", "long_score", Decimal("42"), AS_OF, f"{variant}-signal"),
         ),
-        decision,
-        regime,
-        (ReasonCode.NO_SIGNAL,) if decision is TradeDecision.NO_TRADE else (),
-        None,
     )
     return create_analysis_request(
         evidence=evidence,
@@ -90,11 +98,19 @@ def analysis_request(
         config_version="config-v1",
         historical_versions=HISTORICAL,
         instrument_version="instrument-v1",
-        prompt_version=prompt_version,
-        projection_version="projection-v1",
+        prompt_version=PROMPT_VERSION,
+        projection_version=PROJECTION_VERSION,
         schema_version=SCHEMA_VERSION,
         limits=LIMITS,
     )
+
+
+def benchmark_reference(
+    decision: TradeDecision = TradeDecision.NO_TRADE,
+    regime: MarketRegime = MarketRegime.SIDEWAY,
+) -> AIBenchmarkReference:
+    reasons = (ReasonCode.NO_SIGNAL,) if decision is TradeDecision.NO_TRADE else ()
+    return AIBenchmarkReference(decision, regime, reasons, None)
 
 
 def response_json(
@@ -117,7 +133,11 @@ def response_json(
 
 def benchmark_cases() -> tuple[AIBenchmarkCase, ...]:
     return tuple(
-        create_benchmark_case(analysis_request(decision, regime), f"case-{decision.value}")
+        create_benchmark_case(
+            analysis_request(variant=decision.value),
+            benchmark_reference(decision, regime),
+            f"case-{decision.value}",
+        )
         for decision, regime in (
             (TradeDecision.LONG, MarketRegime.TREND_UP),
             (TradeDecision.SHORT, MarketRegime.TREND_DOWN),
@@ -129,6 +149,12 @@ def benchmark_cases() -> tuple[AIBenchmarkCase, ...]:
 def benchmark_protocol(
     cases: tuple[AIBenchmarkCase, ...] | None = None,
     specs: tuple[AIProviderSpec, ...] | None = None,
+    *,
+    prompt_version: str = PROMPT_VERSION,
+    projection_version: str = PROJECTION_VERSION,
+    schema_version: str = SCHEMA_VERSION,
+    parser_version: str = PARSER_VERSION,
+    calculation: CalculationConfig = CALCULATION,
 ) -> AIBenchmarkProtocol:
     case_values = cases or benchmark_cases()
     spec_values = specs or tuple(provider_spec(provider) for provider in AIProvider)
@@ -141,11 +167,12 @@ def benchmark_protocol(
         config_version="config-v1",
         historical_versions=HISTORICAL,
         instrument_version="instrument-v1",
-        prompt_version=PROMPT_VERSION,
-        projection_version="projection-v1",
-        schema_version=SCHEMA_VERSION,
-        parser_version="strict-json-parser-v1",
+        prompt_version=prompt_version,
+        projection_version=projection_version,
+        schema_version=schema_version,
+        parser_version=parser_version,
         metrics_version="ai-benchmark-metrics-v1",
+        calculation=calculation,
     )
 
 

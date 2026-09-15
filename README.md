@@ -85,10 +85,9 @@ API key, network I/O, order submission, trading loop và live trading vẫn ngo�
 
 ## PHASE 7
 
-- Status: **APPROVED_CANDIDATE**. Implementation commit
-  `3467a0ff0d833dd82440b5c46516794f8050b5e0` passed
-  [GitHub Actions run #12, job `python-312`](https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34832334931/job/103938295697).
-  External human review is still required before `APPROVED`.
+- Status: **APPROVED_CANDIDATE** after final benchmark-integrity remediation. Model input
+  excludes benchmark labels, metrics use explicit Decimal calculation policy, and response
+  provenance is replay-verified. External human review is still required before `APPROVED`.
 - [Implementation plan](docs/phase-7-plan.md)
 - [AI benchmark contract](docs/ai-benchmark.md)
 - [Implementation review](docs/phase-7-review.md)

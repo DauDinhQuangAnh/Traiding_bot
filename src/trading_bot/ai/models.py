@@ -7,11 +7,17 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum, unique
 
+from trading_bot.ai.versions import (
+    PARSER_VERSION,
+    PROJECTION_VERSION,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+)
+from trading_bot.config.models import CalculationConfig
 from trading_bot.domain.enums import MarketRegime, ReasonCode, SetupType, Timeframe, TradeDecision
 from trading_bot.domain.errors import DomainValidationError
 from trading_bot.domain.identifiers import deterministic_id
 from trading_bot.domain.primitives import (
-    ZERO,
     require_finite,
     require_non_empty,
     require_non_negative,
@@ -127,10 +133,6 @@ class AIMarketEvidence:
     as_of: datetime
     candles: tuple[AICandleEvidence, ...]
     observations: tuple[AIObservation, ...]
-    reference_decision: TradeDecision
-    reference_regime: MarketRegime
-    reference_reason_codes: tuple[ReasonCode, ...]
-    setup_type: SetupType | None
 
     def __post_init__(self) -> None:
         require_non_empty(self.symbol, "symbol")
@@ -161,6 +163,16 @@ class AIMarketEvidence:
             if key in observation_keys:
                 raise DomainValidationError("AI evidence contains duplicate observations")
             observation_keys.add(key)
+
+
+@dataclass(frozen=True, slots=True)
+class AIBenchmarkReference:
+    reference_decision: TradeDecision
+    reference_regime: MarketRegime
+    reference_reason_codes: tuple[ReasonCode, ...]
+    setup_type: SetupType | None
+
+    def __post_init__(self) -> None:
         if self.reference_decision is TradeDecision.NO_TRADE and not self.reference_reason_codes:
             raise DomainValidationError("reference NO_TRADE requires reason codes")
 
@@ -191,6 +203,12 @@ class AIAnalysisRequest:
             "schema_version",
         ):
             require_non_empty(getattr(self, name), name)
+        if (
+            self.prompt_version != PROMPT_VERSION
+            or self.projection_version != PROJECTION_VERSION
+            or self.schema_version != SCHEMA_VERSION
+        ):
+            raise DomainValidationError("AI request uses an unregistered contract version")
         counts = {timeframe: 0 for timeframe in Timeframe}
         for candle in self.evidence.candles:
             counts[candle.timeframe] += 1
@@ -198,8 +216,6 @@ class AIAnalysisRequest:
             raise DomainValidationError("AI candle projection exceeds configured bound")
         if len(self.evidence.observations) > self.limits.max_observations:
             raise DomainValidationError("AI observation projection exceeds configured bound")
-        if len(self.evidence.reference_reason_codes) > self.limits.max_reason_codes:
-            raise DomainValidationError("AI reason projection exceeds configured bound")
         for observation in self.evidence.observations:
             if (
                 isinstance(observation.value, str)
@@ -296,6 +312,7 @@ class AIAnalysisResponse:
     prompt_version: str
     projection_version: str
     schema_version: str
+    parser_version: str
     attempts: int
     input_tokens: int | None
     output_tokens: int | None
@@ -310,8 +327,16 @@ class AIAnalysisResponse:
             "prompt_version",
             "projection_version",
             "schema_version",
+            "parser_version",
         ):
             require_non_empty(getattr(self, name), name)
+        if (
+            self.prompt_version != PROMPT_VERSION
+            or self.projection_version != PROJECTION_VERSION
+            or self.schema_version != SCHEMA_VERSION
+            or self.parser_version != PARSER_VERSION
+        ):
+            raise DomainValidationError("AI response uses unregistered provenance")
         if self.attempts <= 0:
             raise DomainValidationError("response attempts must be positive")
         if self.provider_response_id is not None:
@@ -361,6 +386,7 @@ class AIAnalysisResponse:
             self.prompt_version,
             self.projection_version,
             self.schema_version,
+            self.parser_version,
             self.attempts,
             self.input_tokens,
             self.output_tokens,
@@ -374,11 +400,16 @@ class AIAnalysisResponse:
 class AIBenchmarkCase:
     case_id: str
     request: AIAnalysisRequest
+    reference: AIBenchmarkReference
     label: str
 
     def __post_init__(self) -> None:
         require_non_empty(self.label, "case label")
-        expected = deterministic_id("ai-benchmark-case-v1", self.request, self.label)
+        if len(self.reference.reference_reason_codes) > self.request.limits.max_reason_codes:
+            raise DomainValidationError("AI reference reason projection exceeds configured bound")
+        expected = deterministic_id(
+            "ai-benchmark-case-v1", self.request, self.reference, self.label
+        )
         if self.case_id != expected:
             raise DomainValidationError("case_id does not match benchmark case content")
 
@@ -389,6 +420,7 @@ class AIBenchmarkProtocol:
     protocol_version: str
     case_set_id: str
     case_ids: tuple[str, ...]
+    request_ids: tuple[str, ...]
     provider_specs: tuple[AIProviderSpec, ...]
     code_version: str
     strategy_version: str
@@ -400,6 +432,7 @@ class AIBenchmarkProtocol:
     schema_version: str
     parser_version: str
     metrics_version: str
+    calculation: CalculationConfig
 
     def __post_init__(self) -> None:
         for name in (
@@ -419,6 +452,17 @@ class AIBenchmarkProtocol:
             require_non_empty(getattr(self, name), name)
         if not self.case_ids or len(set(self.case_ids)) != len(self.case_ids):
             raise DomainValidationError("benchmark case IDs must be non-empty and unique")
+        if len(self.request_ids) != len(self.case_ids) or len(set(self.request_ids)) != len(
+            self.request_ids
+        ):
+            raise DomainValidationError("benchmark request IDs must cover cases and be unique")
+        if (
+            self.prompt_version != PROMPT_VERSION
+            or self.projection_version != PROJECTION_VERSION
+            or self.schema_version != SCHEMA_VERSION
+            or self.parser_version != PARSER_VERSION
+        ):
+            raise DomainValidationError("benchmark protocol uses an unregistered contract version")
         if not self.provider_specs:
             raise DomainValidationError("benchmark protocol requires provider specs")
         provider_models = tuple((item.provider, item.model) for item in self.provider_specs)
@@ -431,6 +475,7 @@ class AIBenchmarkProtocol:
             "ai-benchmark-protocol-v1",
             self.protocol_version,
             self.case_set_id,
+            self.request_ids,
             self.provider_specs,
             self.code_version,
             self.strategy_version,
@@ -442,6 +487,7 @@ class AIBenchmarkProtocol:
             self.schema_version,
             self.parser_version,
             self.metrics_version,
+            self.calculation,
         )
         if self.protocol_id != expected:
             raise DomainValidationError("protocol_id does not match benchmark protocol content")
@@ -652,6 +698,8 @@ class AIBenchmarkRun:
     def __post_init__(self) -> None:
         if tuple(item.case_id for item in self.cases) != self.protocol.case_ids:
             raise DomainValidationError("benchmark run cases do not match protocol")
+        if tuple(item.request.request_id for item in self.cases) != self.protocol.request_ids:
+            raise DomainValidationError("benchmark run request IDs do not match protocol")
         enabled_specs = tuple(item for item in self.protocol.provider_specs if item.enabled)
         expected_invocations = tuple(
             (case.request.request_id, spec) for case in self.cases for spec in enabled_specs
@@ -669,12 +717,21 @@ class AIBenchmarkRun:
             item.invocation_id for item in self.responses
         ):
             raise DomainValidationError("benchmark response order/identity mismatch")
+        requests = {case.request.request_id: case.request for case in self.cases}
         for invocation, response in zip(self.invocations, self.responses, strict=True):
+            request = requests[invocation.request_id]
             if (
                 response.request_id != invocation.request_id
                 or response.provider is not invocation.provider_spec.provider
                 or response.model != invocation.provider_spec.model
                 or response.attempts > invocation.provider_spec.max_attempts
+                or response.prompt_version != request.prompt_version
+                or response.projection_version != request.projection_version
+                or response.schema_version != request.schema_version
+                or response.prompt_version != self.protocol.prompt_version
+                or response.projection_version != self.protocol.projection_version
+                or response.schema_version != self.protocol.schema_version
+                or response.parser_version != self.protocol.parser_version
             ):
                 raise DomainValidationError("benchmark response changed invocation semantics")
         if self.metrics.protocol_id != self.protocol.protocol_id:
@@ -705,15 +762,3 @@ class AIBenchmarkRun:
         )
         if self.run_id != expected:
             raise DomainValidationError("run_id does not match benchmark run content")
-
-
-def ratio(numerator: int, denominator: int) -> Decimal | None:
-    if denominator == 0:
-        return None
-    return Decimal(numerator) / Decimal(denominator)
-
-
-def confidence_average(values: tuple[Decimal, ...]) -> Decimal | None:
-    if not values:
-        return None
-    return sum(values, ZERO) / Decimal(len(values))

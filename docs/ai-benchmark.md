@@ -30,14 +30,18 @@ execution. Only the existing Risk Engine may create `ApprovedTradePlan`.
 
 ## 3. Evidence projection
 
-`AIMarketEvidence` reuses the existing `TradeDecision`, `MarketRegime`, `ReasonCode`, and
-`Timeframe` enums. It contains:
+`AIMarketEvidence` is the model-visible object. It contains:
 
 - symbol and UTC `as_of`;
 - bounded, closed M5/M15/H1 OHLCV candles;
 - typed Decimal/string/bool observations for indicators, regime, levels, range, and
   signals, each with `observed_at` and a source ID;
-- reference decision, reference regime, reason codes, and optional setup label.
+
+`AIBenchmarkReference` is a separate benchmark-only object containing reference decision,
+reference regime, reason codes, and optional setup. Those fields, their aliases, and the
+case label are never serialized into a provider prompt. Deterministic regime confidence
+may remain visible as `detected_regime_confidence` because it is a point-in-time feature,
+not the benchmark regime label.
 
 Each timeframe must exist. Candles are unique and strictly ordered within their timeframe;
 every close and observation time is at or before `as_of`. Projection limits independently
@@ -50,13 +54,15 @@ construction rather than being silently removed.
 
 ## 4. Request identity
 
-`request_id` is SHA-256 over canonical serialization of evidence, code version, strategy
+`request_id` is SHA-256 over canonical serialization of model-visible evidence, code version, strategy
 version, app-config version, exact historical M5/M15/H1 and composite version set,
 instrument version, prompt version, projection version, response schema version, and
 projection limits. The immutable request recalculates and validates its identity.
 
 Provider/model is deliberately absent from request identity so all providers receive the
-same logical case. It enters the separate invocation identity.
+same logical input. Benchmark reference is also absent: changing only that reference keeps
+the request ID and prompt byte-identical while changing case and protocol IDs. Duplicate
+request IDs are forbidden within one protocol to prevent conflicting-label ambiguity.
 
 ## 5. Providers
 
@@ -84,8 +90,8 @@ for exactly one decision, regime, Decimal confidence, up to three concise reason
 bounded risk flags. It explicitly forbids future/outcome inference, PnL, sizing, leverage,
 stops, targets, order/execution instructions, hidden reasoning, and chain of thought.
 
-Prompt version, evidence-projection version, and response-schema version are separate.
-Unregistered prompt versions fail before invoking a provider.
+Prompt version, evidence-projection version, response-schema version, and parser version
+are registered V1 constants. Unregistered request versions fail before invoking a provider.
 
 ## 7. Response and parser
 
@@ -109,8 +115,9 @@ JSON becomes `INVALID_RESPONSE`; valid JSON with invalid typed content becomes
 A `SUCCESS` response requires decision, regime, and confidence. Any failure requires
 those fields to be `None`, analytical text to be empty, and a sanitized error code. Failure
 is never represented as `NO_TRADE`. Response identity binds invocation/request/provider/
-model, parsed content, versions, attempts, optional provider response ID and optional token
-usage. It excludes wall time, latency, raw payloads, and random IDs.
+model, parsed content, prompt/projection/schema/parser provenance, attempts, optional
+provider response ID and optional token usage. Replay requires provenance to match both
+request and protocol. It excludes wall time, latency, raw payloads, and random IDs.
 
 ## 8. Failure and retry semantics
 
@@ -126,10 +133,12 @@ provider payloads, and secrets are not stored in the response.
 
 ## 9. Benchmark protocol and execution
 
-`AIBenchmarkCase` binds one request and label. Ordered case IDs form `case_set_id`.
+`AIBenchmarkCase` binds one request, benchmark-only reference, and label. Ordered case IDs
+form `case_set_id`.
 `AIBenchmarkProtocol` freezes ordered cases, ordered provider specs, all semantic versions,
-parser version, and metrics version. Reordering/changing cases or providers changes the
-protocol ID. Duplicate case IDs and provider/model pairs fail validation.
+parser version, metrics version, and exact `CalculationConfig`. Reordering/changing cases,
+providers, references, or calculation policy changes the protocol ID. Duplicate case IDs,
+duplicate model-visible request IDs, and duplicate provider/model pairs fail validation.
 
 Execution traverses cases then enabled provider specs in declaration order. Missing ports
 for an enabled provider fail before that invocation. Each invoked provider must return a
@@ -153,6 +162,10 @@ Metrics do not contain winner, rank, recommendation, PnL, return, or a feedback 
 Provider pricing is `None`/not implemented until an explicit immutable pricing policy is
 approved.
 
+All ratios and confidence averages execute under the protocol's scoped project
+`calculation_context`. Non-terminating values such as `1/3` and `1.1/3` are independent of
+ambient Decimal precision/rounding, and the outer context is not mutated.
+
 ## 11. Persistence and replay
 
 SQLite tables are additive and append-only for protocols, requests, cases, invocations,
@@ -163,6 +176,10 @@ and rolls back the transaction. There is no update, delete, or table-drop operat
 Cases are content-addressed independently of protocols, allowing the same evidence case to
 participate in multiple provider sets without duplication or false conflict. Generated
 databases remain outside Git.
+
+The remediation changes canonical PHASE 7 request/case/protocol/response JSON and IDs.
+Existing pre-production development evidence remains append-only but is not silently
+rewritten and is not compatible with typed V1 remediation replay.
 
 ## 12. Dashboard
 

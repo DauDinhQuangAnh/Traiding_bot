@@ -38,10 +38,11 @@ contracts are separately verified and approved.
 
 ## 4. Canonical point-in-time evidence
 
-`AIMarketEvidence` is immutable and contains symbol, UTC `as_of`, bounded closed-candle
-contexts for exactly M5/M15/H1, typed indicator/regime/level/range/signal observations,
-the frozen reference `TradeDecision`, reference `MarketRegime`, and canonical reason
-codes. Every observation carries an `observed_at <= as_of`. Every candle is closed and has
+`AIMarketEvidence` is model-visible and contains only symbol, UTC `as_of`, bounded
+closed-candle contexts for exactly M5/M15/H1, and typed indicator/regime/level/range/signal
+observations. `AIBenchmarkReference` separately contains the frozen reference decision,
+regime, reason codes, and optional setup. Reference labels are never sent to providers.
+Every observation carries an `observed_at <= as_of`. Every candle is closed and has
 `close_time <= as_of`.
 
 Outcome fields do not exist in the projection: no future candle, exit, PnL, MFE, MAE,
@@ -60,6 +61,8 @@ semantically unordered observations produces one canonical order.
 No provider or model belongs to request identity because the same evidence request is
 compared across providers. The request validates its own ID and rejects missing versions,
 future evidence, duplicate observations, unsupported timeframes, and oversized payloads.
+Changing only a benchmark reference leaves `request_id` and prompt bytes unchanged while
+changing case, case-set, and protocol identities.
 
 ## 6. Provider and invocation contracts
 
@@ -96,8 +99,9 @@ new request/protocol evidence.
 
 `AIAnalysisResponse` records response ID, invocation/request/provider/model identities,
 status, optional provider response ID, parsed decision/regime/confidence, concise reasons,
-risk flags, prompt/projection/schema versions, attempt count, and optional input/output
-token counts.
+risk flags, prompt/projection/schema/parser versions, attempt count, and optional
+input/output token counts. Provenance must match both request and protocol before metrics
+or replay are accepted.
 
 Success requires the complete strict schema. Failure requires all analytical fields to be
 absent and preserves a typed sanitized status: `TIMEOUT`, `RATE_LIMIT`, `AUTH_ERROR`,
@@ -117,11 +121,12 @@ headers, credentials, or environment values.
 
 ## 10. Benchmark cases and protocol
 
-`AIBenchmarkCase` binds one request to a stable case ID and optional setup label.
+`AIBenchmarkCase` binds one request, one benchmark-only reference, and a stable label.
 `AIBenchmarkProtocol` freezes the ordered case set, provider specifications, code/strategy/
 config/historical/instrument versions, prompt/projection/schema versions, parser version,
-metrics version, and protocol version. Provider-set or provider-order changes produce a
-different protocol identity. Duplicate cases or provider/model pairs fail closed.
+metrics version, protocol version, and `CalculationConfig`. Provider-set/provider-order or
+calculation-policy changes produce a different protocol identity. Duplicate cases,
+duplicate model-visible request IDs, or duplicate provider/model pairs fail closed.
 
 Execution is all-cases by all-enabled-providers. One provider failure does not erase other
 provider evidence. The run ends `COMPLETED` or `COMPLETED_WITH_PROVIDER_FAILURES`; a
@@ -146,6 +151,10 @@ Zero denominators yield `None`, never a fabricated zero. There is no winner, sco
 selection, profitability metric, or automated feedback into prompts/strategy/config.
 Pricing/cost estimation is omitted until an explicit versioned pricing configuration is
 approved.
+
+All ratios and confidence averages run inside the frozen project `calculation_context`.
+Ambient Decimal precision or rounding cannot alter metrics, canonical JSON, metrics ID,
+or run ID, and the caller Decimal context is restored afterward.
 
 ## 12. Persistence
 
