@@ -13,7 +13,7 @@ an toàn không đủ rõ ràng.
 - PHASE 4 — Historical Data Foundation: **APPROVED after version-identity remediation**
 - PHASE 5 — Backtest Engine: **APPROVED after final Decimal-determinism closure**
 - PHASE 6 — Out-of-Sample Validation and Local Dashboard: **APPROVED**
-- PHASE 7 — Multi-Provider AI Benchmark and Advisory Layer: **IN PROGRESS**
+- PHASE 7 — Multi-Provider AI Benchmark and Advisory Layer: **APPROVED_CANDIDATE**
 - Phạm vi thị trường dự kiến: `BTC-USDT-SWAP`, OKX Demo Trading
 - Live trading: **không thuộc phạm vi hiện tại và phải luôn mặc định tắt**
 - Repository có package Python chạy offline; không có mã kết nối hoặc gửi lệnh tới OKX.
@@ -85,9 +85,13 @@ API key, network I/O, order submission, trading loop và live trading vẫn ngo�
 
 ## PHASE 7
 
-- Status: **IN PROGRESS**. It may become `APPROVED_CANDIDATE`, but external human review
-  is required before `APPROVED`.
+- Status: **APPROVED_CANDIDATE**. Implementation commit
+  `3467a0ff0d833dd82440b5c46516794f8050b5e0` passed
+  [GitHub Actions run #12, job `python-312`](https://github.com/DauDinhQuangAnh/Traiding_bot/actions/runs/34832334931/job/103938295697).
+  External human review is still required before `APPROVED`.
 - [Implementation plan](docs/phase-7-plan.md)
+- [AI benchmark contract](docs/ai-benchmark.md)
+- [Implementation review](docs/phase-7-review.md)
 - Scope is an offline-first, provider-independent benchmark and advisory evidence layer
   over frozen point-in-time market/strategy evidence.
 - AI output is observational only. It cannot alter strategy, Risk Engine, portfolio,
